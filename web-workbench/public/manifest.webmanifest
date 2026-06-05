@@ -1,0 +1,8 @@
+{
+  "name": "Singular Online",
+  "short_name": "Singular Online",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1f5eff"
+}

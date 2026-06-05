@@ -1,0 +1,14 @@
+build/
+install/
+extern/
+.emsdk/
+.deps-web/
+dist/
+Singular/
+singular-src/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.log
+

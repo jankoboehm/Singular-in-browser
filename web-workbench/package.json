@@ -1,0 +1,17 @@
+{
+  "name": "singular-local-wasm-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch:web-deps": "bash scripts/fetch-web-deps.sh",
+    "package": "bash scripts/package-served-files.sh",
+    "smoke": "bash scripts/smoke-static.sh",
+    "smoke:keyboard": "node scripts/keyboard-smoke.mjs",
+    "serve": "python3 scripts/serve-local.py --port 8080",
+    "benchmark": "bash scripts/benchmark-local.sh"
+  },
+  "devDependencies": {
+    "playwright": "^1.53.0"
+  }
+}

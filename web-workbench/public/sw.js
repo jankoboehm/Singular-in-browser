@@ -1,0 +1,39 @@
+const CACHE = 'singular-workbench-shell-v25';
+const SHELL = [
+  './',
+  './index.html',
+  './trust-config.js',
+  './css/app.css',
+  './js/app.js',
+  './js/workspace-db.js',
+  './workers/singular-terminal-worker.js',
+  './workers/singular-batch-worker.js',
+  './manifest.webmanifest'
+];
+
+self.addEventListener('install', event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).catch(() => undefined));
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))));
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', event => {
+  const request = event.request;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.includes('/engine/') || url.pathname.includes('/vendor/')) return;
+  event.respondWith(
+    fetch(request).then(response => {
+      const copy = response.clone();
+      if (response.ok && SHELL.some(path => new URL(path, self.location.href).href === request.url)) {
+        caches.open(CACHE).then(cache => cache.put(request, copy)).catch(() => undefined);
+      }
+      return response;
+    }).catch(() => caches.match(request))
+  );
+});

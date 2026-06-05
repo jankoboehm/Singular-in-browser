@@ -1,0 +1,1290 @@
+import {
+  arrayBufferToBase64,
+  basename,
+  decodeText,
+  downloadBlob,
+  exportWorkspaceJson,
+  getFile,
+  importWorkspaceJson,
+  listFiles,
+  normalizePath,
+  putFile,
+  putText,
+  deleteFile,
+  textExtension
+} from './workspace-db.js';
+
+const CONTROL = '__singularControl';
+const DEFAULT_SCRIPT = `ring r = 0,(x,y),dp;\nideal I = x2-y3, x3-y5;\nideal G = std(I);\nG;\nwrite(":w /workspace/example-output.txt", "Groebner basis of I:", G);\n`;
+const PREVIOUS_DEFAULT_SCRIPTS = Object.freeze([
+  `ring r = 0,(x,y),dp;\nideal I = x2-y3, x3-y5;\nstd(I);\n`
+]);
+const MAX_PULL_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_IMPORT_JSON_BYTES = 50 * 1024 * 1024;
+const SESSION_FS_TIMEOUT_MS = 8000;
+const VENDOR_MANIFEST = 'vendor/versions.json';
+const ENGINE_MANIFEST = 'engine/engine-manifest.json';
+const TRUST_CONFIG = Object.freeze(globalThis.SINGULAR_WORKBENCH_TRUST || {});
+const EXPECTED_VENDOR_ASSETS = Object.freeze([
+  'vendor/xterm/xterm.css',
+  'vendor/xterm/xterm.js',
+  'vendor/xterm/addon-fit.js',
+  'vendor/xterm-pty/index.mjs',
+  'vendor/xterm-pty/workerTools.js'
+]);
+const EXPECTED_ENGINE_ASSETS = Object.freeze([
+  'engine/Singular.js',
+  'engine/Singular.wasm',
+  'engine/Singular.data'
+]);
+const IS_APPLE_PLATFORM = /mac|iphone|ipad|ipod/i.test(
+  navigator.userAgentData?.platform || navigator.platform || ''
+);
+const PRIMARY_MODIFIER = IS_APPLE_PLATFORM ? 'metaKey' : 'ctrlKey';
+const PRIMARY_LABEL = IS_APPLE_PLATFORM ? '⌘' : 'Ctrl';
+const COMPACT_PRIMARY_LABEL = IS_APPLE_PLATFORM ? '⌘' : 'Ctrl';
+const PRIMARY_ARIA = IS_APPLE_PLATFORM ? 'Meta' : 'Control';
+const ALT_LABEL = IS_APPLE_PLATFORM ? 'Option' : 'Alt';
+const COMPACT_ALT_LABEL = IS_APPLE_PLATFORM ? '⌥' : 'Alt';
+const COMPACT_SHIFT_LABEL = IS_APPLE_PLATFORM ? '⇧' : 'Shift';
+
+const el = Object.freeze({
+  statusDot: document.getElementById('engine-status-dot'),
+  status: document.getElementById('engine-status'),
+  detail: document.getElementById('engine-detail'),
+  fileCount: document.getElementById('file-count'),
+  fileFilter: document.getElementById('file-filter'),
+  fileList: document.getElementById('file-list'),
+  fileInput: document.getElementById('file-input'),
+  jsonInput: document.getElementById('workspace-json-input'),
+  pathInput: document.getElementById('path-input'),
+  selectedPath: document.getElementById('selected-path'),
+  editor: document.getElementById('editor'),
+  output: document.getElementById('output-log'),
+  terminalBox: document.getElementById('terminal'),
+  folderStatus: document.getElementById('folder-status'),
+  argNoRc: document.getElementById('arg-no-rc'),
+  argNoShell: document.getElementById('arg-no-shell'),
+  batchTimeout: document.getElementById('batch-timeout'),
+  buttons: {
+    newFile: document.getElementById('new-file'),
+    upload: document.getElementById('upload-files'),
+    download: document.getElementById('download-file'),
+    delete: document.getElementById('delete-file'),
+    openFolder: document.getElementById('open-folder'),
+    pullFolder: document.getElementById('pull-folder'),
+    pushFolder: document.getElementById('push-folder'),
+    exportWorkspace: document.getElementById('export-workspace'),
+    importWorkspace: document.getElementById('import-workspace'),
+    saveEditor: document.getElementById('save-editor'),
+    sendEditor: document.getElementById('send-editor'),
+    runBatch: document.getElementById('run-batch'),
+    loadLib: document.getElementById('load-lib'),
+    start: document.getElementById('start-session'),
+    restart: document.getElementById('restart-session'),
+    terminate: document.getElementById('terminate-session'),
+    clearTerminal: document.getElementById('clear-terminal'),
+    benchmark: document.getElementById('benchmark'),
+    copyOutput: document.getElementById('copy-output')
+  }
+});
+
+let terminal = null;
+let fitAddon = null;
+let worker = null;
+let ptyServer = null;
+let ptyMaster = null;
+let ptySlave = null;
+let terminalInputWriter = null;
+let terminalInputMethod = '';
+let selectedPath = '/workspace/example.sing';
+let folderHandle = null;
+let workerRequestId = 0;
+let ptyModulePromise = null;
+let vendorVerified = false;
+let engineVerified = false;
+let releaseVerified = false;
+let trustedReleaseManifest = null;
+const sessionFiles = new Map();
+const sessionBaselines = new Map();
+const pendingSessionBaselines = new Set();
+const pendingWorkerRequests = new Map();
+
+function keyLabel(key) {
+  if (key === ' ') return 'Space';
+  if (key === 'Backspace') return 'Backspace';
+  if (key === 'Escape') return 'Esc';
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+function compactKeyLabel(key) {
+  if (!IS_APPLE_PLATFORM) return key === 'Backspace' ? 'Bksp' : keyLabel(key);
+  if (key === 'Enter') return '↵';
+  if (key === 'Backspace') return '⌫';
+  if (key === 'Escape') return 'Esc';
+  if (key === ' ') return 'Space';
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+function shortcut(key, { primary = true, alt = false, shift = false } = {}) {
+  const labelParts = [];
+  const compactParts = [];
+  const ariaParts = [];
+  if (primary) {
+    labelParts.push(PRIMARY_LABEL);
+    compactParts.push(COMPACT_PRIMARY_LABEL);
+    ariaParts.push(PRIMARY_ARIA);
+  }
+  if (alt) {
+    labelParts.push(ALT_LABEL);
+    compactParts.push(COMPACT_ALT_LABEL);
+    ariaParts.push('Alt');
+  }
+  if (shift) {
+    labelParts.push('Shift');
+    compactParts.push(COMPACT_SHIFT_LABEL);
+    ariaParts.push('Shift');
+  }
+  labelParts.push(keyLabel(key));
+  compactParts.push(compactKeyLabel(key));
+  ariaParts.push(key);
+  return Object.freeze({
+    key: key.length === 1 ? key.toLowerCase() : key,
+    primary,
+    alt,
+    shift,
+    label: labelParts.join('+'),
+    compactLabel: IS_APPLE_PLATFORM ? compactParts.join('') : compactParts.join('+'),
+    aria: ariaParts.join('+')
+  });
+}
+
+const SHORTCUTS = Object.freeze({
+  newFile: shortcut('n', { alt: true }),
+  upload: shortcut('f', { alt: true }),
+  download: shortcut('d', { alt: true }),
+  delete: shortcut('Backspace', { alt: true }),
+  openFolder: shortcut('o', { alt: true }),
+  pullFolder: shortcut('p', { alt: true }),
+  pushFolder: shortcut('u', { alt: true }),
+  exportWorkspace: shortcut('e', { alt: true }),
+  importWorkspace: shortcut('i', { alt: true }),
+  saveEditor: shortcut('s'),
+  sendEditor: shortcut('Enter'),
+  runBatch: shortcut('Enter', { shift: true }),
+  loadLib: shortcut('l', { alt: true }),
+  start: shortcut('s', { alt: true }),
+  restart: shortcut('r', { alt: true }),
+  terminate: shortcut('x', { alt: true }),
+  clearTerminal: shortcut('k', { alt: true }),
+  benchmark: shortcut('b', { alt: true }),
+  copyOutput: shortcut('c', { alt: true })
+});
+
+function setStatus(kind, text, detail = '') {
+  el.statusDot.className = `dot${kind ? ` ${kind}` : ''}`;
+  el.status.textContent = text;
+  el.detail.textContent = detail;
+}
+
+function log(message) {
+  const stamp = new Date().toLocaleTimeString();
+  el.output.textContent += `[${stamp}] ${message}\n`;
+  el.output.scrollTop = el.output.scrollHeight;
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function formatRuntimeMs(ms) {
+  const number = Number(ms);
+  return Number.isFinite(number) ? `${Math.round(number)} ms` : 'unknown';
+}
+
+function requireWebCrypto() {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('Web Crypto is required to verify asset hashes. Use HTTPS or localhost.');
+  }
+}
+
+async function sha256Hex(buffer) {
+  requireWebCrypto();
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function normalizeOptionalUrl(value) {
+  const text = String(value || '').trim();
+  return text || '';
+}
+
+function hasTrustedReleaseConfig() {
+  return Boolean(normalizeOptionalUrl(TRUST_CONFIG.releaseManifestUrl));
+}
+
+function pemToArrayBuffer(pem, label) {
+  const clean = String(pem || '')
+    .replace(`-----BEGIN ${label}-----`, '')
+    .replace(`-----END ${label}-----`, '')
+    .replace(/\s+/g, '');
+  if (!clean) throw new Error(`Missing ${label} PEM data.`);
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function verifyReleaseSignature(manifestText, signatureUrl, publicKeyPem) {
+  requireWebCrypto();
+  const response = await fetch(signatureUrl, { cache: 'no-store', mode: 'cors' });
+  if (!response.ok) throw new Error(`Release manifest signature returned HTTP ${response.status}`);
+  const signature = await response.arrayBuffer();
+  const key = await crypto.subtle.importKey(
+    'spki',
+    pemToArrayBuffer(publicKeyPem, 'PUBLIC KEY'),
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['verify']
+  );
+  const ok = await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    key,
+    signature,
+    new TextEncoder().encode(manifestText)
+  );
+  if (!ok) throw new Error('Release manifest signature is invalid.');
+}
+
+async function loadManifest(path) {
+  const response = await fetch(path, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
+  const manifest = await response.json();
+  if (manifest?.format !== 'singular-browser-workbench.asset-manifest.v1' || !manifest.assets) {
+    throw new Error(`${path} is not a Singular Online asset manifest`);
+  }
+  return manifest;
+}
+
+async function loadTrustedReleaseManifest() {
+  const releaseManifestUrl = normalizeOptionalUrl(TRUST_CONFIG.releaseManifestUrl);
+  if (!releaseManifestUrl) return null;
+
+  const response = await fetch(releaseManifestUrl, { cache: 'no-store', mode: 'cors' });
+  if (!response.ok) throw new Error(`Trusted release manifest returned HTTP ${response.status}`);
+  const manifestText = await response.text();
+
+  const releaseSignatureUrl = normalizeOptionalUrl(TRUST_CONFIG.releaseSignatureUrl);
+  const publicKeyPem = String(TRUST_CONFIG.publicKeyPem || '').trim();
+  if (!releaseSignatureUrl || !publicKeyPem) {
+    throw new Error('Trusted release verification needs releaseSignatureUrl and publicKeyPem.');
+  }
+  await verifyReleaseSignature(manifestText, releaseSignatureUrl, publicKeyPem);
+  log(`Verified release manifest signature from ${releaseSignatureUrl}.`);
+
+  const manifest = JSON.parse(manifestText);
+  if (manifest?.format !== 'singular-browser-workbench.asset-manifest.v1' || !manifest.assets) {
+    throw new Error(`${releaseManifestUrl} is not a Singular Online asset manifest`);
+  }
+  return manifest;
+}
+
+async function verifyAsset(relPath, expected) {
+  if (!expected?.sha256) throw new Error(`No SHA-256 checksum for ${relPath}`);
+  const response = await fetch(relPath, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`${relPath} returned HTTP ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  if (Number.isFinite(expected.bytes) && buffer.byteLength !== expected.bytes) {
+    throw new Error(`${relPath} size mismatch: expected ${expected.bytes}, got ${buffer.byteLength}`);
+  }
+  const actual = await sha256Hex(buffer);
+  if (actual !== expected.sha256) {
+    throw new Error(`${relPath} SHA-256 mismatch`);
+  }
+  return { path: relPath, bytes: buffer.byteLength, sha256: actual };
+}
+
+async function verifyManifestAssets(manifest, relPaths) {
+  const verified = [];
+  for (const relPath of relPaths) {
+    verified.push(await verifyAsset(relPath, manifest.assets[relPath]));
+  }
+  return verified;
+}
+
+function requireManifestAssets(manifest, relPaths, label) {
+  const missing = relPaths.filter(relPath => !manifest.assets?.[relPath]);
+  if (missing.length) {
+    throw new Error(`${label} does not list required asset(s): ${missing.join(', ')}`);
+  }
+}
+
+async function ensureTrustedReleaseVerified() {
+  if (releaseVerified) return trustedReleaseManifest;
+  const manifest = await loadTrustedReleaseManifest();
+  if (!manifest) {
+    releaseVerified = true;
+    return null;
+  }
+  const assets = Object.keys(manifest.assets);
+  requireManifestAssets(manifest, EXPECTED_ENGINE_ASSETS, 'Trusted release manifest');
+  requireManifestAssets(manifest, EXPECTED_VENDOR_ASSETS, 'Trusted release manifest');
+  await verifyManifestAssets(manifest, assets);
+  trustedReleaseManifest = manifest;
+  releaseVerified = true;
+  log(`Verified ${assets.length} deployed asset(s) against ${TRUST_CONFIG.releaseManifestUrl}.`);
+  return trustedReleaseManifest;
+}
+
+async function ensureVendorVerified() {
+  if (vendorVerified) return;
+  const releaseManifest = await ensureTrustedReleaseVerified();
+  if (releaseManifest) {
+    vendorVerified = true;
+    log('Trusted release manifest covers browser vendor assets.');
+    return;
+  }
+  const manifest = await loadManifest(VENDOR_MANIFEST);
+  const assets = EXPECTED_VENDOR_ASSETS;
+  await verifyManifestAssets(manifest, assets);
+  vendorVerified = true;
+  log(`Verified ${assets.length} browser vendor asset(s) against ${VENDOR_MANIFEST}.`);
+}
+
+async function ensureEngineVerified() {
+  if (engineVerified) return;
+  const releaseManifest = await ensureTrustedReleaseVerified();
+  if (releaseManifest) {
+    engineVerified = true;
+    log('Trusted release manifest covers Singular engine assets.');
+    return;
+  }
+  const manifest = await loadManifest(ENGINE_MANIFEST);
+  const assets = EXPECTED_ENGINE_ASSETS;
+  requireManifestAssets(manifest, assets, ENGINE_MANIFEST);
+  await verifyManifestAssets(manifest, assets);
+  engineVerified = true;
+  log(`Verified ${assets.length} Singular engine asset(s) against ${ENGINE_MANIFEST}.`);
+}
+
+function setSelectedPath(path) {
+  selectedPath = normalizePath(path || selectedPath);
+  el.pathInput.value = selectedPath;
+  el.selectedPath.textContent = selectedPath;
+}
+
+function getArgs({ batch = false } = {}) {
+  const args = batch ? ['-q'] : [];
+  if (el.argNoRc.checked) args.push('--no-rc');
+  if (batch && el.argNoShell.checked) args.push('--no-shell');
+  if (batch) args.push('--no-tty');
+  return args;
+}
+
+function terminalCtor() {
+  return window.Terminal?.Terminal || window.Terminal;
+}
+
+function fitCtor() {
+  return window.FitAddon?.FitAddon || window.FitAddon;
+}
+
+async function loadPtyModule() {
+  if (!ptyModulePromise) {
+    await ensureVendorVerified();
+    ptyModulePromise = import('../vendor/xterm-pty/index.mjs');
+  }
+  const mod = await ptyModulePromise;
+  const api = {
+    openpty: mod.openpty || window.openpty,
+    TtyServer: mod.TtyServer || window.TtyServer
+  };
+  if (typeof api.openpty !== 'function') {
+    throw new Error('xterm-pty did not provide openpty(). Re-run scripts/fetch-web-deps.sh.');
+  }
+  if (typeof api.TtyServer !== 'function') {
+    throw new Error('xterm-pty did not provide TtyServer. Use the pinned xterm-pty version from scripts/fetch-web-deps.sh.');
+  }
+  return api;
+}
+
+function ensureTerminal() {
+  if (terminal) return terminal;
+  const Terminal = terminalCtor();
+  if (!Terminal) {
+    throw new Error('xterm.js is missing. Run scripts/fetch-web-deps.sh or place xterm.js in public/vendor/xterm/.');
+  }
+  terminal = new Terminal({
+    cursorBlink: true,
+    convertEol: true,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    fontSize: 14,
+    scrollback: 7000,
+    tabStopWidth: 2,
+    theme: { background: '#111111' }
+  });
+  const FitAddon = fitCtor();
+  if (FitAddon) {
+    fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+  }
+  terminal.open(el.terminalBox);
+  fitAddon?.fit?.();
+  window.addEventListener('resize', () => fitAddon?.fit?.());
+  return terminal;
+}
+
+function resetTerminal() {
+  try { terminal?.dispose?.(); } catch (_) { /* noop */ }
+  terminal = null;
+  fitAddon = null;
+  el.terminalBox.textContent = '';
+}
+
+function postControl(targetWorker, type, payload = {}, transfer = []) {
+  targetWorker.postMessage({ [CONTROL]: true, type, ...payload }, transfer);
+}
+
+function requestWorkerControl(type, payload = {}, transfer = [], { timeoutMs = SESSION_FS_TIMEOUT_MS } = {}) {
+  if (!worker) return Promise.reject(new Error('No Singular session is running.'));
+  const requestId = ++workerRequestId;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingWorkerRequests.delete(requestId);
+      reject(new Error(`${type} timed out.`));
+    }, timeoutMs);
+    pendingWorkerRequests.set(requestId, { resolve, reject, timer });
+    postControl(worker, type, { requestId, ...payload }, transfer);
+  });
+}
+
+function settleWorkerRequest(message) {
+  const requestId = message?.requestId;
+  if (!requestId) return false;
+  const pending = pendingWorkerRequests.get(requestId);
+  if (!pending) return false;
+  pendingWorkerRequests.delete(requestId);
+  clearTimeout(pending.timer);
+  if (message.type === 'error') pending.reject(new Error(message.message || 'Filesystem request failed.'));
+  else pending.resolve(message);
+  return true;
+}
+
+function rejectPendingWorkerRequests(reason = 'Singular session stopped.') {
+  for (const pending of pendingWorkerRequests.values()) {
+    clearTimeout(pending.timer);
+    pending.reject(new Error(reason));
+  }
+  pendingWorkerRequests.clear();
+}
+
+function terminalRowsText() {
+  return Array.from(el.terminalBox.querySelectorAll('.xterm-rows > div'))
+    .map(row => row.textContent)
+    .join('\n');
+}
+
+function terminalBufferText() {
+  const buffer = terminal?.buffer?.active;
+  if (!buffer) return '';
+  const lines = [];
+  for (let i = 0; i < buffer.length; i += 1) {
+    lines.push(buffer.getLine(i)?.translateToString(true) || '');
+  }
+  return lines.join('\n');
+}
+
+function terminalDebugState() {
+  return {
+    hasTerminalPaste: typeof terminal?.paste === 'function',
+    hasTerminalInput: typeof terminal?.input === 'function',
+    hasTerminalDataEvent: typeof terminal?._core?.coreService?.triggerDataEvent === 'function',
+    hasPtyMasterInput: typeof ptyMaster?.ldisc?.writeFromLower === 'function',
+    terminalInputMethod,
+    hasPtySlave: Boolean(ptySlave),
+    hasWorker: Boolean(worker),
+    ptyServerState: ptyServer?.state || null,
+    ptyServerInputBuffered: ptyServer?.toWorkerBuf?.length ?? null,
+    ptySlaveReadable: ptySlave?.readable ?? null,
+    ptySlaveBuffered: ptySlave?.fromLdiscToUpperBuffer?.length ?? null,
+    rows: terminalRowsText(),
+    buffer: terminalBufferText()
+  };
+}
+
+async function waitForTerminalInputReady(timeoutMs = 8000) {
+  const startedAt = performance.now();
+  while (performance.now() - startedAt < timeoutMs) {
+    if (ptyServer?.state === 'input' && `${terminalRowsText()}\n${terminalBufferText()}`.includes('>')) return true;
+    await delay(100);
+  }
+  return false;
+}
+
+function writePtyServerInput(text) {
+  if (!ptyServer) return false;
+  const bytes = Array.from(new TextEncoder().encode(String(text || '').replace(/\r?\n/g, '\n')));
+  ptyServer.toWorkerBuf.push(...bytes);
+  if (ptyServer.state === 'input') ptyServer.feedToWorker(bytes.length);
+  return true;
+}
+
+function selectTerminalInputBridge() {
+  terminalInputWriter = null;
+  terminalInputMethod = '';
+
+  if (typeof terminal?.paste === 'function') {
+    terminalInputMethod = 'xterm paste API';
+    terminalInputWriter = text => {
+      terminal.focus?.();
+      terminal.paste(String(text || ''));
+    };
+    return;
+  }
+
+  if (typeof ptyMaster?.ldisc?.writeFromLower === 'function') {
+    terminalInputMethod = 'PTY line discipline';
+    terminalInputWriter = text => ptyMaster.ldisc.writeFromLower(String(text || '').replace(/\r?\n/g, '\r'));
+    return;
+  }
+
+  if (ptyServer) {
+    terminalInputMethod = 'PTY server feed';
+    terminalInputWriter = writePtyServerInput;
+  }
+}
+
+async function workspacePayload() {
+  const files = await listFiles();
+  return files.map(record => ({
+    path: record.path,
+    mime: record.mime || 'application/octet-stream',
+    data: record.data
+  }));
+}
+
+function sessionMeta(file) {
+  return {
+    size: Number(file?.size || file?.data?.byteLength || 0),
+    mtimeMs: Number(file?.mtimeMs || 0)
+  };
+}
+
+function sameSessionMeta(a, b) {
+  if (!a || !b) return false;
+  if (Number(a.size) !== Number(b.size)) return false;
+  if (!a.mtimeMs || !b.mtimeMs) return true;
+  return Number(a.mtimeMs) === Number(b.mtimeMs);
+}
+
+function markPendingSessionBaselines(files) {
+  for (const file of files) pendingSessionBaselines.add(normalizePath(file.path));
+}
+
+function markSessionBaseline(path, meta) {
+  const normalized = normalizePath(path);
+  pendingSessionBaselines.delete(normalized);
+  sessionBaselines.set(normalized, sessionMeta(meta || sessionFiles.get(normalized)));
+}
+
+function sessionVersionChanged(path, workspaceRecord, sessionRecord) {
+  if (!sessionRecord) return false;
+  const baseline = sessionBaselines.get(normalizePath(path));
+  if (baseline) return !sameSessionMeta(baseline, sessionRecord);
+  if (!workspaceRecord) return false;
+  return Number(sessionRecord.size) !== Number(workspaceRecord.data?.byteLength || 0);
+}
+
+function updateSessionFile(file) {
+  if (!file?.path) return;
+  const path = normalizePath(file.path);
+  const existing = sessionFiles.get(path) || {};
+  const data = file.data instanceof ArrayBuffer ? file.data : existing.data;
+  const record = {
+    ...existing,
+    path,
+    size: Number(file.size ?? data?.byteLength ?? existing.size ?? 0),
+    mtimeMs: Number(file.mtimeMs || existing.mtimeMs || 0)
+  };
+  if (data) record.data = data;
+  sessionFiles.set(path, record);
+  if (pendingSessionBaselines.has(path)) markSessionBaseline(path, record);
+}
+
+function deleteSessionFile(path) {
+  const normalized = normalizePath(path);
+  sessionFiles.delete(normalized);
+  sessionBaselines.delete(normalized);
+  pendingSessionBaselines.delete(normalized);
+}
+
+async function listMergedFiles() {
+  const workspaceRecords = await listFiles();
+  const byPath = new Map();
+  for (const record of workspaceRecords) {
+    byPath.set(record.path, { path: record.path, workspaceRecord: record });
+  }
+  for (const sessionRecord of sessionFiles.values()) {
+    const existing = byPath.get(sessionRecord.path) || { path: sessionRecord.path };
+    existing.sessionRecord = sessionRecord;
+    byPath.set(sessionRecord.path, existing);
+  }
+  const entries = Array.from(byPath.values()).map(entry => {
+    const sessionOnly = Boolean(entry.sessionRecord && !entry.workspaceRecord);
+    const sessionModified = Boolean(
+      entry.sessionRecord &&
+      entry.workspaceRecord &&
+      sessionVersionChanged(entry.path, entry.workspaceRecord, entry.sessionRecord)
+    );
+    return {
+      ...entry,
+      sessionOnly,
+      sessionModified,
+      size: entry.sessionRecord?.size ?? entry.workspaceRecord?.data?.byteLength ?? 0
+    };
+  });
+  return entries.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function startSessionFileTracking() {
+  refreshFileList();
+}
+
+function stopSessionFileTracking() {
+  sessionFiles.clear();
+  sessionBaselines.clear();
+  pendingSessionBaselines.clear();
+}
+
+async function readSessionFile(path) {
+  const normalized = normalizePath(path);
+  const liveRecord = sessionFiles.get(normalized);
+  if (!liveRecord?.data) throw new Error(`${normalized} has not been captured from the live session yet.`);
+  const data = liveRecord.data;
+  const record = {
+    path: normalized,
+    data,
+    mime: textExtension(normalized) ? 'text/plain;charset=utf-8' : 'application/octet-stream',
+    updatedAt: Date.now(),
+    source: 'session',
+    size: Number(liveRecord.size ?? data.byteLength),
+    mtimeMs: Number(liveRecord.mtimeMs || 0)
+  };
+  return record;
+}
+
+async function importSessionFileToWorkspace(path) {
+  const record = await readSessionFile(path);
+  await putFile(record.path, record.data, {
+    mime: record.mime,
+    updatedAt: Date.now(),
+    source: 'session'
+  });
+  markSessionBaseline(record.path, record);
+  return record;
+}
+
+async function readFileForOutput(path) {
+  const normalized = normalizePath(path);
+  if (worker) {
+    try {
+      return await readSessionFile(normalized);
+    } catch (error) {
+      if (sessionFiles.has(normalized)) log(`Could not read live ${normalized}: ${error.message || String(error)}`);
+    }
+  }
+  return getFile(normalized);
+}
+
+async function sendWorkspaceToWorker(targetWorker) {
+  const files = await workspacePayload();
+  if (targetWorker === worker && ptyServer) {
+    log('Saved browser workspace only. Running-session filesystem sync is disabled while Singular owns the worker.');
+    return;
+  }
+  const transfer = files.map(file => file.data).filter(Boolean);
+  markPendingSessionBaselines(files);
+  if (targetWorker === worker) {
+    await requestWorkerControl('fs.writeMany', { files }, transfer);
+  } else {
+    postControl(targetWorker, 'fs.writeMany', { files }, transfer);
+  }
+  log(`Synced ${files.length} workspace file(s) into the running WASM filesystem.`);
+}
+
+async function refreshFileList() {
+  const files = await listMergedFiles();
+  const filter = el.fileFilter.value.trim().toLowerCase();
+  const visible = filter ? files.filter(file => file.path.toLowerCase().includes(filter)) : files;
+  const workspaceCount = files.filter(file => file.workspaceRecord).length;
+  const liveOnlyCount = files.filter(file => file.sessionOnly).length;
+  el.fileCount.textContent = `${workspaceCount} workspace file${workspaceCount === 1 ? '' : 's'}${liveOnlyCount ? `, ${liveOnlyCount} live file${liveOnlyCount === 1 ? '' : 's'}` : ''}`;
+  el.fileList.textContent = '';
+  for (const file of visible) {
+    const li = document.createElement('li');
+    const button = document.createElement('button');
+    const label = document.createElement('span');
+    const badges = document.createElement('span');
+    button.type = 'button';
+    label.className = 'file-path';
+    label.textContent = file.path;
+    badges.className = 'file-badges';
+    if (file.sessionOnly) {
+      const badge = document.createElement('span');
+      badge.className = 'file-badge live';
+      badge.textContent = 'live';
+      badges.append(badge);
+    } else if (file.sessionModified) {
+      const badge = document.createElement('span');
+      badge.className = 'file-badge modified';
+      badge.textContent = 'modified';
+      badges.append(badge);
+    }
+    button.append(label, badges);
+    button.title = `${file.path}\n${Math.round((file.size || 0) / 1024)} KB${file.sessionOnly ? '\nLive session file; opening imports it into the browser workspace.' : ''}${file.sessionModified ? '\nLive session version differs; opening imports it into the browser workspace.' : ''}`;
+    button.setAttribute('aria-current', file.path === selectedPath ? 'true' : 'false');
+    button.addEventListener('click', () => runAction('Open file', () => loadFileIntoEditor(file.path)));
+    li.append(button);
+    el.fileList.append(li);
+  }
+}
+
+async function loadFileIntoEditor(path) {
+  const normalized = normalizePath(path);
+  let record = await getFile(normalized);
+  if (worker && sessionFiles.has(normalized)) {
+    try {
+      record = await importSessionFileToWorkspace(normalized);
+    } catch (error) {
+      log(`Could not open live ${normalized}: ${error.message || String(error)}`);
+    }
+  }
+  if (!record) return;
+  setSelectedPath(normalized);
+  if (textExtension(normalized)) {
+    el.editor.value = decodeText(record.data);
+  } else {
+    el.editor.value = `/* Binary file selected: ${normalized}\n   Size: ${record.data?.byteLength || 0} bytes\n   Use Download to save it. */\n`;
+  }
+  await refreshFileList();
+}
+
+async function ensureExampleFile() {
+  const existing = await getFile('/workspace/example.sing');
+  if (!existing) {
+    await putText('/workspace/example.sing', DEFAULT_SCRIPT, { source: 'example' });
+  } else if (PREVIOUS_DEFAULT_SCRIPTS.includes(decodeText(existing.data))) {
+    await putText('/workspace/example.sing', DEFAULT_SCRIPT, { source: 'example' });
+  }
+  await loadFileIntoEditor('/workspace/example.sing');
+}
+
+async function saveEditor() {
+  const path = normalizePath(el.pathInput.value || selectedPath);
+  await putText(path, el.editor.value, { source: 'editor' });
+  setSelectedPath(path);
+  await refreshFileList();
+  log(worker ? `Saved ${path} to browser workspace. Restart Singular to copy it into the running filesystem.` : `Saved ${path}.`);
+}
+
+async function uploadFiles(fileList) {
+  const files = Array.from(fileList || []);
+  for (const file of files) {
+    const path = normalizePath(file.webkitRelativePath || file.name);
+    await putFile(path, await file.arrayBuffer(), {
+      mime: file.type || 'application/octet-stream',
+      updatedAt: file.lastModified || Date.now(),
+      source: 'upload'
+    });
+  }
+  await refreshFileList();
+  log(worker
+    ? `Uploaded ${files.length} file(s) into browser workspace. Restart Singular to copy them into the running filesystem.`
+    : `Uploaded ${files.length} file(s) into /workspace.`);
+}
+
+async function downloadSelectedFile() {
+  const path = normalizePath(el.pathInput.value || selectedPath);
+  const record = await readFileForOutput(path);
+  if (!record) {
+    log(`No file at ${path}.`);
+    return;
+  }
+  downloadBlob(new Blob([record.data], { type: record.mime || 'application/octet-stream' }), basename(path));
+}
+
+async function deleteSelectedFile() {
+  const path = normalizePath(el.pathInput.value || selectedPath);
+  await deleteFile(path);
+  if (sessionFiles.has(path)) log(`Deleted ${path} from browser workspace. The live session copy remains until Singular stops.`);
+  else log(`Deleted ${path}.`);
+  await refreshFileList();
+}
+
+async function exportWorkspace() {
+  const json = await exportWorkspaceJson();
+  downloadBlob(new Blob([json], { type: 'application/json' }), `singular-workspace-${Date.now()}.json`);
+}
+
+async function importWorkspace(file) {
+  if (!file) return;
+  if (file.size > MAX_IMPORT_JSON_BYTES) {
+    log(`Workspace JSON is too large (${Math.round(file.size / 1024 / 1024)} MB).`);
+    return;
+  }
+  const count = await importWorkspaceJson(await file.text());
+  await refreshFileList();
+  if (worker) {
+    await sendWorkspaceToWorker(worker);
+  }
+  log(`Imported ${count} file(s) from workspace JSON.`);
+}
+
+async function startSession() {
+  if (worker) {
+    log('A Singular session is already running. Use Restart or Terminate first.');
+    return;
+  }
+  try {
+    setStatus('busy', 'Starting', 'loading terminal and worker');
+    await ensureEngineVerified();
+    const term = ensureTerminal();
+    term.clear();
+    const pty = await loadPtyModule();
+    const pair = pty.openpty();
+    ptyMaster = pair.master;
+    ptySlave = pair.slave;
+    term.loadAddon(ptyMaster);
+    selectTerminalInputBridge();
+
+    worker = new Worker('workers/singular-terminal-worker.js', { name: 'singular-terminal-worker' });
+    worker.addEventListener('message', event => handleWorkerMessage(event.data));
+    worker.addEventListener('error', event => {
+      log(`Terminal worker error: ${event.message}`);
+      setStatus('error', 'Worker error');
+    });
+
+    postControl(worker, 'configure', { args: getArgs({ batch: false }) });
+    await sendWorkspaceToWorker(worker);
+
+    ptyServer = new pty.TtyServer(ptySlave);
+    ptyServer.start(worker);
+    startSessionFileTracking();
+    setStatus('ready', 'Session running', 'interactive terminal');
+    log('Started Singular terminal session.');
+    log(terminalInputMethod ? `Terminal input bridge: ${terminalInputMethod}.` : 'Terminal input bridge is not available.');
+  } catch (error) {
+    setStatus('error', 'Could not start', error.message || String(error));
+    log(`Start failed: ${error.message || String(error)}`);
+    terminateSession({ silent: true });
+  }
+}
+
+function terminateSession({ silent = false } = {}) {
+  try { ptyServer?.close?.(); } catch (_) { /* noop */ }
+  try { worker?.terminate?.(); } catch (_) { /* noop */ }
+  worker = null;
+  ptyServer = null;
+  ptyMaster = null;
+  ptySlave = null;
+  terminalInputWriter = null;
+  terminalInputMethod = '';
+  stopSessionFileTracking();
+  rejectPendingWorkerRequests();
+  if (!silent) log('Terminated Singular session.');
+  setStatus('', 'Not started');
+  refreshFileList();
+}
+
+async function restartSession() {
+  terminateSession({ silent: true });
+  resetTerminal();
+  await startSession();
+}
+
+async function sendEditorToTerminal() {
+  if (!worker || !ptySlave) {
+    log('No terminal session. Start Singular first.');
+    return;
+  }
+  if (!terminalInputWriter) {
+    log('Terminal input bridge is not available in this session.');
+    return;
+  }
+  if (!await waitForTerminalInputReady()) {
+    log('Terminal is not ready for input yet; wait for the Singular prompt and try again.');
+    return;
+  }
+  const code = el.editor.value.endsWith('\n') ? el.editor.value : `${el.editor.value}\n`;
+  if (writeTerminalInput(code)) log(`Sent editor contents to the terminal via ${terminalInputMethod}.`);
+}
+
+function writeTerminalInput(text) {
+  try {
+    if (!terminalInputWriter) return false;
+    terminalInputWriter(text);
+    return true;
+  } catch (error) {
+    log(`Could not send terminal input: ${error.message || String(error)}`);
+    return false;
+  }
+}
+
+async function loadSelectedLib() {
+  const path = normalizePath(el.pathInput.value || selectedPath);
+  await saveEditor();
+  if (!worker || !ptySlave) {
+    log('Library saved. Start a terminal session to load it.');
+    return;
+  }
+  if (!terminalInputWriter) {
+    log('Library saved, but terminal input bridge is not available in this session.');
+    return;
+  }
+  if (!await waitForTerminalInputReady()) {
+    log('Library saved, but the terminal is not ready for input yet.');
+    return;
+  }
+  if (writeTerminalInput(`LIB "${path}";\n`)) log(`Sent LIB command for ${path} via ${terminalInputMethod}.`);
+}
+
+function handleWorkerMessage(message) {
+  if (!message || !message[CONTROL]) return;
+  if (settleWorkerRequest(message)) return;
+  if (message.type === 'ready') {
+    setStatus('ready', 'Session running', message.detail || 'runtime ready');
+  } else if (message.type === 'fs.ack') {
+    log(message.detail || 'Filesystem operation completed.');
+  } else if (message.type === 'fs.list') {
+    for (const file of message.files || []) updateSessionFile(file);
+    refreshFileList();
+  } else if (message.type === 'fs.changed') {
+    updateSessionFile(message.file);
+    refreshFileList();
+  } else if (message.type === 'fs.deleted') {
+    deleteSessionFile(message.path);
+    refreshFileList();
+  } else if (message.type === 'error') {
+    log(`Runtime: ${message.message || 'unknown error'}`);
+  } else if (message.type === 'metrics') {
+    const totalMs = message.metrics?.totalMs;
+    log(totalMs == null ? `Runtime metrics: ${JSON.stringify(message.metrics)}` : `Runtime total: ${formatRuntimeMs(totalMs)}.`);
+  }
+}
+
+async function runBatch({ benchmark = false } = {}) {
+  await saveEditor();
+  await ensureEngineVerified();
+  const scriptPath = normalizePath(el.pathInput.value || selectedPath);
+  const files = await workspacePayload();
+  const transfer = files.map(file => file.data).filter(Boolean);
+  const timeoutMs = Math.max(1, Number(el.batchTimeout.value || 20)) * 1000;
+  const batchWorker = new Worker('workers/singular-batch-worker.js', { name: 'singular-batch-worker' });
+  const startedAt = performance.now();
+  setStatus('busy', benchmark ? 'Benchmarking' : 'Running script', scriptPath);
+  log(`${benchmark ? 'Benchmark' : 'Batch run'} started: ${scriptPath}`);
+
+  let finished = false;
+  const timer = setTimeout(() => {
+    if (finished) return;
+    finished = true;
+    batchWorker.terminate();
+    setStatus('error', 'Batch timed out', `timeout ${timeoutMs / 1000} sec`);
+    log(`Batch worker terminated after timeout ${timeoutMs / 1000} sec.`);
+  }, timeoutMs);
+
+  batchWorker.addEventListener('message', event => {
+    const msg = event.data || {};
+    if (msg.type === 'stdout' || msg.type === 'stderr') {
+      el.output.textContent += msg.text || '';
+      el.output.scrollTop = el.output.scrollHeight;
+    } else if (msg.type === 'phase') {
+      log(msg.name);
+    } else if (msg.type === 'metrics') {
+      const totalMs = msg.metrics?.totalMs;
+      log(totalMs == null ? `Batch metrics: ${JSON.stringify(msg.metrics)}` : `Batch runtime: ${formatRuntimeMs(totalMs)}.`);
+    } else if (msg.type === 'done') {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      const elapsed = Math.round(performance.now() - startedAt);
+      setStatus(msg.exitCode === 0 ? 'ready' : 'error', `Batch finished`, `exit ${msg.exitCode}, ${formatRuntimeMs(elapsed)}`);
+      log(`Batch finished with exit ${msg.exitCode} in ${formatRuntimeMs(elapsed)}.`);
+      batchWorker.terminate();
+    }
+  });
+  batchWorker.addEventListener('error', event => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    setStatus('error', 'Batch worker error');
+    log(`Batch worker error: ${event.message}`);
+    batchWorker.terminate();
+  });
+
+  batchWorker.postMessage({
+    type: 'run',
+    args: getArgs({ batch: true }),
+    scriptPath,
+    files,
+    benchmark
+  }, transfer);
+}
+
+async function benchmark() {
+  const sample = `ring r = 0,(x,y,z),dp;\nideal I = x2+y2+z2, x*y-z, y*z-x;\ntimer = 1;\nstd(I);\n`; // modest by design
+  setSelectedPath('/workspace/benchmark.sing');
+  el.editor.value = sample;
+  await runBatch({ benchmark: true });
+}
+
+function clearTerminal() {
+  terminal?.clear?.();
+}
+
+async function copyOutput() {
+  if (!navigator.clipboard?.writeText) {
+    log('Clipboard writing is not available in this browser.');
+    return;
+  }
+  await navigator.clipboard.writeText(el.output.textContent);
+  log('Copied output log.');
+}
+
+async function openLocalFolder() {
+  if (!('showDirectoryPicker' in window)) {
+    el.folderStatus.textContent = 'File System Access API is not available in this browser.';
+    return;
+  }
+  folderHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  el.folderStatus.textContent = `Selected: ${folderHandle.name}`;
+}
+
+async function pullLocalFolder() {
+  if (!folderHandle) await openLocalFolder();
+  if (!folderHandle) return;
+  const imported = await readDirectoryIntoWorkspace(folderHandle, '/workspace');
+  await refreshFileList();
+  if (worker) await sendWorkspaceToWorker(worker);
+  log(`Pulled ${imported} file(s) from selected local folder.`);
+}
+
+async function readDirectoryIntoWorkspace(handle, prefix) {
+  let count = 0;
+  for await (const [name, child] of handle.entries()) {
+    if (name.startsWith('.')) continue;
+    const path = `${prefix}/${name}`;
+    if (child.kind === 'file') {
+      const file = await child.getFile();
+      if (file.size > MAX_PULL_FILE_BYTES) {
+        log(`Skipped large file ${path} (${Math.round(file.size / 1024 / 1024)} MB).`);
+        continue;
+      }
+      await putFile(path, await file.arrayBuffer(), {
+        mime: file.type || 'application/octet-stream',
+        updatedAt: file.lastModified || Date.now(),
+        source: 'local-folder'
+      });
+      count += 1;
+    } else if (child.kind === 'directory') {
+      count += await readDirectoryIntoWorkspace(child, path);
+    }
+  }
+  return count;
+}
+
+async function pushWorkspaceToFolder() {
+  if (!folderHandle) await openLocalFolder();
+  if (!folderHandle) return;
+  const files = await listMergedFiles();
+  if (!window.confirm(`Write ${files.length} file(s) to "${folderHandle.name}"? Existing files with the same names may be overwritten.`)) {
+    log('Push to local folder cancelled.');
+    return;
+  }
+  for (const file of files) {
+    const record = await readFileForOutput(file.path);
+    if (!record) {
+      log(`Skipped ${file.path}; no readable workspace or session file.`);
+      continue;
+    }
+    await writeRecordToFolder(folderHandle, record);
+  }
+  log(`Pushed ${files.length} file(s) to selected local folder.`);
+}
+
+async function writeRecordToFolder(root, record) {
+  const rel = normalizePath(record.path).replace(/^\/workspace\/?/, '');
+  const parts = rel.split('/').filter(Boolean);
+  if (!parts.length) return;
+  let dir = root;
+  for (const part of parts.slice(0, -1)) {
+    dir = await dir.getDirectoryHandle(part, { create: true });
+  }
+  const fileHandle = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(record.data);
+  await writable.close();
+}
+
+async function checkEngineAssets() {
+  try {
+    const manifest = await loadManifest(ENGINE_MANIFEST);
+    const count = Object.keys(manifest.assets).filter(path => path.startsWith('engine/Singular.')).length;
+    if (!manifest.assets['engine/Singular.js']) throw new Error('engine/Singular.js is missing from manifest');
+    const trustDetail = hasTrustedReleaseConfig() ? '; GitHub release check configured' : '';
+    setStatus('ready', 'Ready', `${count} engine asset hash${count === 1 ? '' : 'es'} verified${trustDetail}`);
+  } catch (error) {
+    setStatus('error', 'Engine missing', 'build or copy Singular.js/.wasm/.data');
+    log(`Engine manifest not ready: ${error.message || String(error)}`);
+  }
+}
+
+function setButtonShortcut(button, item) {
+  if (!button || !item) return;
+  const baseLabel = button.dataset.label || button.textContent.trim();
+  button.dataset.label = baseLabel;
+  button.textContent = '';
+  const label = document.createElement('span');
+  label.className = 'button-label';
+  label.textContent = baseLabel;
+  const key = document.createElement('kbd');
+  key.className = 'shortcut';
+  key.textContent = button.closest('.button-grid.compact') ? item.compactLabel : item.label;
+  key.title = item.label;
+  button.append(label, key);
+  button.title = `${baseLabel} (${item.label})`;
+  button.setAttribute('aria-keyshortcuts', item.aria);
+}
+
+function normalizeEventKey(event) {
+  return event.key.length === 1 ? event.key.toLowerCase() : event.key;
+}
+
+function matchesShortcut(event, item) {
+  if (!item) return false;
+  if (event.defaultPrevented || event.repeat) return false;
+  if (Boolean(event[PRIMARY_MODIFIER]) !== Boolean(item.primary)) return false;
+  if (IS_APPLE_PLATFORM && event.ctrlKey) return false;
+  if (!IS_APPLE_PLATFORM && event.metaKey) return false;
+  if (Boolean(event.altKey) !== Boolean(item.alt)) return false;
+  if (Boolean(event.shiftKey) !== Boolean(item.shift)) return false;
+  return normalizeEventKey(event) === item.key;
+}
+
+function runAction(name, action) {
+  try {
+    const result = action();
+    if (result?.catch) {
+      result.catch(error => log(`${name} failed: ${error.message || String(error)}`));
+    }
+  } catch (error) {
+    log(`${name} failed: ${error.message || String(error)}`);
+  }
+}
+
+function bindButton(name, action) {
+  const button = el.buttons[name];
+  const item = SHORTCUTS[name];
+  setButtonShortcut(button, item);
+  button.addEventListener('click', () => runAction(button.dataset.label || name, action));
+  return { name, action, shortcut: item };
+}
+
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try { await navigator.serviceWorker.register('sw.js', { scope: './' }); } catch (_) { /* optional */ }
+}
+
+function wireEvents() {
+  const actions = [
+    bindButton('newFile', () => {
+      const suggested = `/workspace/untitled-${Date.now()}.sing`;
+      setSelectedPath(suggested);
+      el.editor.value = '';
+      el.editor.focus();
+    }),
+    bindButton('upload', () => el.fileInput.click()),
+    bindButton('download', downloadSelectedFile),
+    bindButton('delete', deleteSelectedFile),
+    bindButton('openFolder', openLocalFolder),
+    bindButton('pullFolder', pullLocalFolder),
+    bindButton('pushFolder', pushWorkspaceToFolder),
+    bindButton('exportWorkspace', exportWorkspace),
+    bindButton('importWorkspace', () => el.jsonInput.click()),
+    bindButton('saveEditor', saveEditor),
+    bindButton('sendEditor', sendEditorToTerminal),
+    bindButton('runBatch', () => runBatch()),
+    bindButton('loadLib', loadSelectedLib),
+    bindButton('start', startSession),
+    bindButton('restart', restartSession),
+    bindButton('terminate', terminateSession),
+    bindButton('clearTerminal', clearTerminal),
+    bindButton('benchmark', benchmark),
+    bindButton('copyOutput', copyOutput)
+  ];
+
+  el.fileInput.addEventListener('change', () => uploadFiles(el.fileInput.files));
+  el.fileFilter.addEventListener('input', refreshFileList);
+  el.pathInput.addEventListener('change', () => setSelectedPath(el.pathInput.value));
+  el.jsonInput.addEventListener('change', () => importWorkspace(el.jsonInput.files?.[0]));
+
+  document.addEventListener('keydown', event => {
+    for (const action of actions) {
+      if (matchesShortcut(event, action.shortcut)) {
+        event.preventDefault();
+        runAction(action.name, action.action);
+        break;
+      }
+    }
+  });
+}
+
+async function main() {
+  wireEvents();
+  await ensureExampleFile();
+  await refreshFileList();
+  await checkEngineAssets();
+  const api = {
+    startSession,
+    terminateSession,
+    runBatch,
+    benchmark,
+    sendEditorToTerminal,
+    shortcuts: SHORTCUTS,
+    listFiles,
+    listVisibleFiles: listMergedFiles,
+    sendWorkspaceToWorker: () => worker ? sendWorkspaceToWorker(worker) : Promise.resolve()
+  };
+  if (new URLSearchParams(location.search).has('keyboard-smoke')) {
+    api.debugState = terminalDebugState;
+    api.debugSendTerminalInput = (method, text) => {
+      const value = String(text || '');
+      const before = terminalDebugState();
+      if (method === 'pty-slave-write') {
+        ptySlave?.write?.(value);
+      } else if (method === 'pty-master-lf') {
+        ptyMaster?.ldisc?.writeFromLower?.(value.replace(/\r\n/g, '\n'));
+      } else if (method === 'pty-master-cr') {
+        ptyMaster?.ldisc?.writeFromLower?.(value.replace(/\r?\n/g, '\r'));
+      } else if (method === 'xterm-data-event') {
+        terminal?._core?.coreService?.triggerDataEvent?.(value.replace(/\r?\n/g, '\r'), true);
+      } else if (method === 'xterm-input') {
+        terminal?.input?.(value.replace(/\r?\n/g, '\r'));
+      } else if (method === 'xterm-paste') {
+        terminal?.paste?.(value);
+      } else if (method === 'pty-server-feed') {
+        writePtyServerInput(value);
+      } else {
+        throw new Error(`Unknown terminal input method: ${method}`);
+      }
+      return { before, after: terminalDebugState() };
+    };
+  }
+  window.SINGULAR_WORKBENCH = api;
+  registerServiceWorker();
+}
+
+main().catch(error => {
+  setStatus('error', 'App error');
+  log(error.stack || error.message || String(error));
+});
