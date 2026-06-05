@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Singular Online</title>
+  <meta name="description" content="Singular in the browser via WebAssembly. Code runs in the users' browser sandbox.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="vendor/xterm/xterm.css" integrity="sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP" crossorigin="anonymous">
+  <link rel="stylesheet" href="css/app.css">
+  <script defer src="vendor/xterm/xterm.js" integrity="sha384-M169f14mRZOXm3hD/v2Ti0ThIT/RnAQagXA9nlE15yHAtrW19gdePJh/HaTzUOe/" crossorigin="anonymous"></script>
+  <script defer src="vendor/xterm/addon-fit.js" integrity="sha384-iF+jqbuti4XlB64clWgFWYEscb+UnSRv3VgVikGYZu+otNFnSHr7y7NcKfBnGizn" crossorigin="anonymous"></script>
+  <script src="trust-config.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Singular Online</h1>
+      <p class="muted">Singular in the browser via WebAssembly. Code runs in the users' browser sandbox.</p>
+    </div>
+    <div class="status-card" aria-live="polite">
+      <span id="engine-status-dot" class="dot"></span>
+      <span id="engine-status">Not started</span>
+      <span id="engine-detail" class="muted small"></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="sidebar panel" aria-label="Workspace files">
+      <div class="panel-head">
+        <h2>Workspace</h2>
+        <span id="file-count" class="badge">0 files</span>
+      </div>
+      <div class="button-grid compact">
+        <button id="new-file" type="button">New</button>
+        <button id="upload-files" type="button">Upload</button>
+        <button id="download-file" type="button">Download</button>
+        <button id="delete-file" type="button" class="danger ghost">Delete</button>
+      </div>
+      <input id="file-input" type="file" multiple hidden>
+      <label for="file-filter" class="visually-hidden">Filter workspace files</label>
+      <input id="file-filter" class="text-input" type="search" placeholder="Filter files…" autocomplete="off">
+      <ol id="file-list" class="file-list"></ol>
+
+      <details class="local-folder">
+        <summary>Local folder bridge</summary>
+        <p class="small muted">Reads and writes only a folder explicitly selected by the user. Supported mainly by Chromium-family browsers over HTTPS or localhost.</p>
+        <div class="button-grid compact">
+          <button id="open-folder" type="button">Open folder</button>
+          <button id="pull-folder" type="button">Pull</button>
+          <button id="push-folder" type="button">Push</button>
+        </div>
+        <p id="folder-status" class="small muted">No folder selected.</p>
+      </details>
+
+      <details>
+        <summary>Workspace import/export</summary>
+        <div class="button-grid compact">
+          <button id="export-workspace" type="button">Export JSON</button>
+          <button id="import-workspace" type="button">Import JSON</button>
+        </div>
+        <input id="workspace-json-input" type="file" accept="application/json,.json" hidden>
+      </details>
+    </section>
+
+    <section class="editor panel" aria-label="Script editor">
+      <div class="panel-head">
+        <h2>Script / library editor</h2>
+        <span id="selected-path" class="badge">/workspace/example.sing</span>
+      </div>
+      <label for="path-input" class="small muted">Virtual path inside Singular:</label>
+      <input id="path-input" class="text-input mono" value="/workspace/example.sing" spellcheck="false">
+      <textarea id="editor" spellcheck="false">ring r = 0,(x,y),dp;
+ideal I = x2-y3, x3-y5;
+std(I);
+</textarea>
+      <div class="button-row">
+        <button id="save-editor" type="button">Save to workspace</button>
+        <button id="send-editor" type="button" class="primary">Send to terminal</button>
+        <button id="run-batch" type="button">Run script</button>
+        <button id="load-lib" type="button">LIB selected</button>
+      </div>
+      <p class="small muted">Run script starts a fresh batch worker. Send to terminal pastes the editor into the live Singular REPL.</p>
+    </section>
+
+    <section class="runtime panel" aria-label="Singular runtime">
+      <div class="panel-head runtime-head">
+        <h2>Singular session</h2>
+        <div class="button-row no-margin">
+          <button id="start-session" type="button" class="primary">Start</button>
+          <button id="restart-session" type="button">Restart</button>
+          <button id="terminate-session" type="button" class="danger">Terminate</button>
+          <button id="clear-terminal" type="button">Clear</button>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+        <label title="Start Singular without reading startup/resource files, giving a predictable clean session.">
+          <input id="arg-no-rc" type="checkbox" checked aria-describedby="arg-no-rc-help"> --no-rc
+          <span id="arg-no-rc-help" class="visually-hidden">Start Singular without reading startup or resource files, giving a predictable clean session.</span>
+        </label>
+        <label title="For fresh batch runs, ask Singular to disable shell escapes. This option is not used for the live REPL.">
+          <input id="arg-no-shell" type="checkbox" checked aria-describedby="arg-no-shell-help"> batch --no-shell
+          <span id="arg-no-shell-help" class="visually-hidden">For fresh batch runs, ask Singular to disable shell escapes. This option is not used for the live REPL.</span>
+        </label>
+        <label title="Maximum wall-clock time before a fresh batch worker is terminated.">
+          Batch timeout <input id="batch-timeout" class="number-input" type="number" min="1" max="120" value="20" aria-describedby="batch-timeout-help"> sec
+          <span id="batch-timeout-help" class="visually-hidden">Maximum wall-clock time before a fresh batch worker is terminated.</span>
+        </label>
+      </div>
+
+      <div id="terminal" class="terminal" role="application" aria-label="Interactive Singular terminal"></div>
+      <div class="button-row">
+        <button id="benchmark" type="button">Benchmark startup/run</button>
+        <button id="copy-output" type="button">Copy output log</button>
+      </div>
+      <pre id="output-log" class="output-log" aria-live="polite"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <p class="small muted">Written by <a href="https://agag-jboehm.math.rptu.de/~boehm/">Janko Boehm</a> and <a href="https://github.com/wangyenshu">Yanshu Wang</a>. Generative AI (OpenAI GPT-5 via Codex) was used in developing this software package. The project is related to <a href="https://gepris.dfg.de/gepris/projekt/286237555?language=en">SFB-TRR 195 "Symbolic Tools in Mathematics and their Application"</a> (DFG project number 286237555). Note: local file access is permission-based. The page should not silently scan or modify the user's disk. Upload copies files into the browser workspace and, when Singular is running, into the Singular session. Download reads from the Singular session when running and otherwise from the browser workspace. Pull copies files into the browser workspace and Singular session, push writes the downloadable version back to the selected folder. No warranty is given and the authors do not take responsibility for results or consequences of use.</p>
+  </footer>
+</body>
+</html>

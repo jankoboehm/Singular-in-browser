@@ -1,0 +1,155 @@
+name: Build Singular in Browser
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      singular_ref:
+        description: Singular/Singular ref to build
+        required: true
+        default: spielwiese
+      release_id:
+        description: Release id used for packaging
+        required: false
+        default: manual
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: emscripten/emsdk:3.1.23
+    env:
+      SINGULAR_REF: ${{ inputs.singular_ref || 'spielwiese' }}
+      RELEASE_ID: ${{ inputs.release_id || github.event.release.tag_name || github.sha }}
+      SERVER_BASE_URL: https://www.singular.uni-kl.de/wasm/releases/${{ inputs.release_id || github.event.release.tag_name || github.sha }}/
+      GITHUB_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_id || github.event.release.tag_name || github.sha }}/release-manifest.json
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            autoconf automake autoconf-archive libtool pkg-config git curl ca-certificates \
+            python3 nodejs npm make g++ gcc m4 bison flex patch file xz-utils rsync zip
+
+      - name: Check out browser repository
+        uses: actions/checkout@v4
+        with:
+          path: browser
+          persist-credentials: false
+
+      - name: Check out Singular
+        uses: actions/checkout@v4
+        with:
+          repository: Singular/Singular
+          ref: ${{ env.SINGULAR_REF }}
+          path: Singular
+          persist-credentials: false
+
+      - name: Overlay browser sources into Singular checkout
+        run: |
+          mkdir -p Singular/emscripten
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='LICENSE' \
+            --exclude='Singular/' \
+            browser/ Singular/emscripten/
+
+      - name: Fetch browser dependencies
+        run: bash Singular/emscripten/web-workbench/scripts/fetch-web-deps.sh
+
+      - name: Build Singular WebAssembly engine
+        env:
+          JOBS: 8
+        run: |
+          cd Singular
+          bash emscripten/web-workbench/scripts/build-full-wasm.sh
+
+      - name: Static smoke checks
+        run: |
+          cd Singular/emscripten/web-workbench
+          bash scripts/smoke-static.sh
+
+      - name: Prepare signing keys
+        if: github.event_name == 'release'
+        env:
+          PRIVATE_KEY: ${{ secrets.SINGULAR_WASM_RELEASE_PRIVATE_KEY_PEM }}
+          PUBLIC_KEY: ${{ secrets.SINGULAR_WASM_RELEASE_PUBLIC_KEY_PEM }}
+        run: |
+          test -n "${PRIVATE_KEY}"
+          test -n "${PUBLIC_KEY}"
+          mkdir -p "$HOME/.singular-wasm-release"
+          printf '%s\n' "${PRIVATE_KEY}" > "$HOME/.singular-wasm-release/private.pem"
+          printf '%s\n' "${PUBLIC_KEY}" > "$HOME/.singular-wasm-release/public.pem"
+
+      - name: Package unsigned build artifact
+        if: github.event_name != 'release'
+        run: |
+          cd Singular/emscripten/web-workbench
+          bash scripts/package-served-files.sh
+
+      - name: Package signed release artifact
+        if: github.event_name == 'release'
+        env:
+          SIGNING_KEY: /github/home/.singular-wasm-release/private.pem
+          TRUST_RELEASE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/release-manifest.json
+          TRUST_RELEASE_SIGNATURE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/release-manifest.json.sig
+          TRUST_PUBLIC_KEY_FILE: /github/home/.singular-wasm-release/public.pem
+        run: |
+          cd Singular/emscripten/web-workbench
+          bash scripts/package-served-files.sh
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: singular-in-browser-${{ env.RELEASE_ID }}
+          path: |
+            Singular/emscripten/web-workbench/dist/${{ env.RELEASE_ID }}/singular-workbench-${{ env.RELEASE_ID }}.zip
+            Singular/emscripten/web-workbench/dist/${{ env.RELEASE_ID }}/release-manifest.json
+            Singular/emscripten/web-workbench/dist/${{ env.RELEASE_ID }}/release-manifest.json.sig
+            Singular/emscripten/web-workbench/dist/${{ env.RELEASE_ID }}/release-manifest.json.sig.base64
+          if-no-files-found: ignore
+
+  attach-release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_ID: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: singular-in-browser-${{ env.RELEASE_ID }}
+          path: release-assets
+
+      - name: Attach artifacts to GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const release = context.payload.release;
+            const dir = path.join(process.cwd(), 'release-assets');
+            for (const name of fs.readdirSync(dir)) {
+              if (!name.endsWith('.zip') && !name.endsWith('.json') && !name.endsWith('.sig') && !name.endsWith('.base64')) continue;
+              const filePath = path.join(dir, name);
+              const data = fs.readFileSync(filePath);
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                name,
+                data,
+                headers: {
+                  'content-type': 'application/octet-stream',
+                  'content-length': data.length
+                }
+              });
+            }

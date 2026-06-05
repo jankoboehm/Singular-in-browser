@@ -1,0 +1,35 @@
+{
+  "assets": {
+    "vendor/xterm-pty/index.mjs": {
+      "bytes": 18980,
+      "sha256": "d1c53f82af59b62e88503dece97c11349ea13d3a40cc6e443ccb8f27437ce7a3",
+      "sha384": "78f1c3f8ca3d1ae81dbb63d247f6a9e4797e064c7e12da3e0209818a2be6da13a51d94eb19854947e5895c382117f134"
+    },
+    "vendor/xterm-pty/workerTools.js": {
+      "bytes": 7776,
+      "sha256": "4455291d937537e18813ff424d18a87cb575e7cbc7497292a5ed3f6e6e979274",
+      "sha384": "fe5673ddbb5a032a4a3451aa017020543845aec4a2fec0e4279dc74e115a5e06dbb81d5b4661290c9b57c1d229c94566"
+    },
+    "vendor/xterm/addon-fit.js": {
+      "bytes": 1497,
+      "sha256": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089",
+      "sha384": "885fa3a9bbad8b85e507ae1c95680559812c71bf949d246fdd58158a419866efa8b4d167487afbcbb35c29f0671a2ce7"
+    },
+    "vendor/xterm/xterm.css": {
+      "bytes": 5559,
+      "sha256": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6",
+      "sha384": "f1793dc32fe0cc40d42ab5edae60856b66c1b8adc1a63a43b8bfe9d1278a417d7d2a197f33e9473a00ff0b261fede7cf"
+    },
+    "vendor/xterm/xterm.js": {
+      "bytes": 289441,
+      "sha256": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495",
+      "sha384": "335ebd7f5e264593979b7843fefd938b44e1213fd19c041a81703d9e5135e721c0b6b5b5f6075e3c987f1da4f350e7bf"
+    }
+  },
+  "format": "singular-browser-workbench.asset-manifest.v1",
+  "packages": {
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "xterm-pty": "0.9.4"
+  }
+}

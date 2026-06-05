@@ -1,0 +1,8 @@
+# Historical placeholder.
+#
+# The active split-repository workflow is now:
+#
+#   .github/workflows/build.yml
+#
+# Keep pull-request builds read-only. Release uploads are handled by a separate
+# job with contents: write.

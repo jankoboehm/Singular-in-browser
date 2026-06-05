@@ -1,42 +1,87 @@
-Code to allow building Singular to WASM using Emscripten.
+# Singular in Browser
 
-Files:
+This repository contains the browser/WebAssembly build support and web
+interface for running Singular in a user's browser sandbox.
 
-- `build.sh`: Run as `emscripten/build.sh` in root directory of Singular. Requires installation of 'autoconf-archive' 'mercurial'. Tested on emsdk 3.1.23.
+The code builds on PR #1360 (and preserves the respective commits).
 
-- `web-template`: Web template with 'xterm-pty'.
+## Repo
 
-- `wasm_patch.c`: Patch script.
+Tracked:
 
-After executing `build.sh`, use `run-web-demo.sh` to setup a working website.
+- Emscripten build scripts
+- browser frontend sources in `web-workbench/public`
+- worker sources, deployment examples, and documentation
+- placeholders such as `web-workbench/public/engine/README.md`.
 
-Todo:
+Not tracked:
 
-- Add cddlib (done), ntl (done), normaliz (done), 4ti2, polymake, TOPCOM (done).
-- "normaliz.lib", "gfan.lib", "tropical.lib" are working. Most libraries should work but this requires testing.
+- `Singular.js`
+- `Singular.wasm`
+- `Singular.data`
+- generated engine manifests
+- release zip and `dist/`
+- local Singular checkouts and dependency build trees.
 
-Setup Instructions:
+The CI stores build output as workflow artifacts
+(generated on pull requests or manual builds). Published releases attach the zip,
+manifest, and signature as GitHub Release assets.
 
-- install emscripten:
+## Building In CI
+
+Implemented in `.github/workflows/build.yml`:
+
+1. checks out this repository
+2. checks out `Singular/Singular` at the selected ref, default is
+   `spielwiese`
+3. overlays this repo into `Singular/emscripten`
+4. builds the WebAssembly engine
+5. packages the static web app
+6. uploads the package as a workflow artifact.
+
+For GitHub Releases, the workflow signs the release manifest and attaches the
+zip plus manifest files to the GitHub Release. The repository secrets have to be configured before publishing signed releases:
+
+```text
+SINGULAR_WASM_RELEASE_PRIVATE_KEY_PEM
+SINGULAR_WASM_RELEASE_PUBLIC_KEY_PEM
 ```
-git clone https://github.com/emscripten-core/emsdk.git
-cd emsdk
-./emsdk install 3.1.23
-./emsdk activate 3.1.23
-source ./emsdk_env.sh
+
+Pull-request builds do not need signing secrets and should remain read-only.
+
+## Local Serving for Tests
+
+After `web-workbench/public/engine/` and `web-workbench/public/vendor/` are
+populated:
+
+```bash
+bash run-web-workbench.sh
 ```
-- compile Singular to WASM
-Fromm root directory of this git repository, run 
+
+open
+
+```text
+http://127.0.0.1:9999/
 ```
-bash emscripten/build.sh
+
+The local server sends the COOP/COEP headers required for `SharedArrayBuffer`.
+
+## Deployment
+
+The Singular webserver should serve immutable release directories, for example:
+
+```text
+https://www.singular.uni-kl.de/wasm/releases/2026-06-04/
 ```
-- build all.lib (optional)
-Fromm root directory of this git repository, run 
-```
-bash emscripten/gen_all_lib.sh
-```
-- setup website:
-Fromm root directory of this git repository, run 
-```
-bash emscripten/run-web-demo.sh
-```
+
+Manual deployment is:
+
+1. download the release zip from the GitHub Release
+2. unpack it into a new release directory on the Singular webserver
+3. make sure the webserver sends the headers from
+   `web-workbench/deploy/nginx.conf`
+4. keep old release directories immutable
+5. optionally update a `latest` redirect after verification.
+
+Detailed signing and deployment instructions are in
+`web-workbench/docs/DEPLOYMENT.md`.
