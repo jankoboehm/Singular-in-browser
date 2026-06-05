@@ -26,7 +26,7 @@ jobs:
       SINGULAR_REF: ${{ inputs.singular_ref || 'spielwiese' }}
       RELEASE_ID: ${{ inputs.release_id || github.event.release.tag_name || github.sha }}
       SERVER_BASE_URL: https://www.singular.uni-kl.de/wasm/releases/${{ inputs.release_id || github.event.release.tag_name || github.sha }}/
-      GITHUB_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_id || github.event.release.tag_name || github.sha }}/release-manifest.json
+      GITHUB_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ inputs.release_id || github.event.release.tag_name || github.sha }}/release-manifest.json
     steps:
       - name: Install build dependencies
         run: |
@@ -96,8 +96,8 @@ jobs:
         if: github.event_name == 'release'
         env:
           SIGNING_KEY: /github/home/.singular-wasm-release/private.pem
-          TRUST_RELEASE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/release-manifest.json
-          TRUST_RELEASE_SIGNATURE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/release-manifest.json.sig
+          TRUST_RELEASE_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ github.event.release.tag_name }}/release-manifest.json
+          TRUST_RELEASE_SIGNATURE_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ github.event.release.tag_name }}/release-manifest.json.sig
           TRUST_PUBLIC_KEY_FILE: /github/home/.singular-wasm-release/public.pem
         run: |
           cd Singular/emscripten/web-workbench
@@ -153,3 +153,45 @@ jobs:
                 }
               });
             }
+
+  publish-manifest:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_ID: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: singular-in-browser-${{ env.RELEASE_ID }}
+          path: release-assets
+
+      - name: Check out manifest branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: manifests
+
+      - name: Publish signed manifest to gh-pages
+        run: |
+          test -f release-assets/release-manifest.json
+          test -f release-assets/release-manifest.json.sig
+          mkdir -p "manifests/singular-wasm/${RELEASE_ID}"
+          cp release-assets/release-manifest.json \
+            "manifests/singular-wasm/${RELEASE_ID}/release-manifest.json"
+          cp release-assets/release-manifest.json.sig \
+            "manifests/singular-wasm/${RELEASE_ID}/release-manifest.json.sig"
+          cd manifests
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "singular-wasm/${RELEASE_ID}/release-manifest.json" \
+            "singular-wasm/${RELEASE_ID}/release-manifest.json.sig"
+          if git diff --cached --quiet; then
+            echo "Signed manifest for ${RELEASE_ID} is already published."
+          else
+            git commit -m "publish Singular WASM manifest ${RELEASE_ID}"
+            git push origin HEAD:gh-pages
+          fi
