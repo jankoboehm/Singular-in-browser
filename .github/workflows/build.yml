@@ -9,9 +9,24 @@ on:
         required: true
         default: spielwiese
       release_id:
-        description: Release id used for packaging
+        description: Release id used for packaging. Use test-* for signed release tests.
         required: false
-        default: manual
+        default: test-manual
+      signed_release_test:
+        description: "WARNING: signs artifacts with release secrets. Run only on trusted maintainer branches."
+        required: true
+        type: boolean
+        default: false
+      trusted_branch_confirmed:
+        description: "Required for signed_release_test: I confirm the selected branch is trusted and may access signing secrets."
+        required: true
+        type: boolean
+        default: false
+      publish_test_manifest:
+        description: "WARNING: for signed tests only, write manifest/signature to gh-pages under release_id. Use test-* ids."
+        required: true
+        type: boolean
+        default: false
   release:
     types: [published]
 
@@ -27,6 +42,9 @@ jobs:
       RELEASE_ID: ${{ inputs.release_id || github.event.release.tag_name || github.sha }}
       SERVER_BASE_URL: https://www.singular.uni-kl.de/wasm/releases/${{ inputs.release_id || github.event.release.tag_name || github.sha }}/
       GITHUB_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ inputs.release_id || github.event.release.tag_name || github.sha }}/release-manifest.json
+      IS_SIGNED_BUILD: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.signed_release_test) }}
+      IS_SIGNED_RELEASE_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_release_test }}
+      TRUSTED_BRANCH_CONFIRMED: ${{ inputs.trusted_branch_confirmed }}
     steps:
       - name: Install build dependencies
         run: |
@@ -74,30 +92,65 @@ jobs:
           cd Singular/emscripten/web-workbench
           bash scripts/smoke-static.sh
 
+      - name: Validate signed release test request
+        if: env.IS_SIGNED_RELEASE_TEST == 'true'
+        run: |
+          if [ "${TRUSTED_BRANCH_CONFIRMED}" != "true" ]; then
+            echo "signed_release_test requires trusted_branch_confirmed=true." >&2
+            exit 1
+          fi
+          case "${RELEASE_ID}" in
+            test-*) ;;
+            *)
+              echo "Manual signed release tests must use a release_id beginning with test-." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Prepare signing keys
-        if: github.event_name == 'release'
+        if: env.IS_SIGNED_BUILD == 'true'
         env:
           PRIVATE_KEY: ${{ secrets.SINGULAR_WASM_RELEASE_PRIVATE_KEY_PEM }}
           PUBLIC_KEY: ${{ secrets.SINGULAR_WASM_RELEASE_PUBLIC_KEY_PEM }}
         run: |
-          test -n "${PRIVATE_KEY}"
-          test -n "${PUBLIC_KEY}"
+          if [ -z "${PRIVATE_KEY}" ]; then
+            echo "Missing SINGULAR_WASM_RELEASE_PRIVATE_KEY_PEM secret." >&2
+            exit 1
+          fi
+          if [ -z "${PUBLIC_KEY}" ]; then
+            echo "Missing SINGULAR_WASM_RELEASE_PUBLIC_KEY_PEM secret." >&2
+            exit 1
+          fi
+          case "${PRIVATE_KEY}" in
+            *"-----BEGIN PRIVATE KEY-----"*) ;;
+            *)
+              echo "SINGULAR_WASM_RELEASE_PRIVATE_KEY_PEM must be a PKCS#8 PEM private key." >&2
+              exit 1
+              ;;
+          esac
+          case "${PUBLIC_KEY}" in
+            *"-----BEGIN PUBLIC KEY-----"*) ;;
+            *)
+              echo "SINGULAR_WASM_RELEASE_PUBLIC_KEY_PEM must be an SPKI PEM public key." >&2
+              exit 1
+              ;;
+          esac
           mkdir -p "$HOME/.singular-wasm-release"
           printf '%s\n' "${PRIVATE_KEY}" > "$HOME/.singular-wasm-release/private.pem"
           printf '%s\n' "${PUBLIC_KEY}" > "$HOME/.singular-wasm-release/public.pem"
 
       - name: Package unsigned build artifact
-        if: github.event_name != 'release'
+        if: env.IS_SIGNED_BUILD != 'true'
         run: |
           cd Singular/emscripten/web-workbench
           bash scripts/package-served-files.sh
 
       - name: Package signed release artifact
-        if: github.event_name == 'release'
+        if: env.IS_SIGNED_BUILD == 'true'
         env:
           SIGNING_KEY: /github/home/.singular-wasm-release/private.pem
-          TRUST_RELEASE_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ github.event.release.tag_name }}/release-manifest.json
-          TRUST_RELEASE_SIGNATURE_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ github.event.release.tag_name }}/release-manifest.json.sig
+          TRUST_RELEASE_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ env.RELEASE_ID }}/release-manifest.json
+          TRUST_RELEASE_SIGNATURE_URL: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/singular-wasm/${{ env.RELEASE_ID }}/release-manifest.json.sig
           TRUST_PUBLIC_KEY_FILE: /github/home/.singular-wasm-release/public.pem
         run: |
           cd Singular/emscripten/web-workbench
@@ -155,13 +208,13 @@ jobs:
             }
 
   publish-manifest:
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.signed_release_test && inputs.publish_test_manifest)
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      RELEASE_ID: ${{ github.event.release.tag_name }}
+      RELEASE_ID: ${{ inputs.release_id || github.event.release.tag_name }}
     steps:
       - name: Download build artifact
         uses: actions/download-artifact@v4
