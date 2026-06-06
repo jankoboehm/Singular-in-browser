@@ -1,7 +1,9 @@
 # Singular in Browser
 
 This repository contains the browser/WebAssembly build support and web
-interface for running Singular in a user's browser sandbox.
+interface for running Singular in a user's browser sandbox. Try here:
+
+https://singular-in-browser.pages.dev
 
 The code builds on PR #1360 (and preserves the respective commits).
 
