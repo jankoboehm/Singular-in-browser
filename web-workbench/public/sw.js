@@ -1,4 +1,4 @@
-const CACHE = 'singular-workbench-shell-v25';
+const CACHE = 'singular-workbench-shell-v41';
 const SHELL = [
   './',
   './index.html',
@@ -6,6 +6,10 @@ const SHELL = [
   './css/app.css',
   './js/app.js',
   './js/workspace-db.js',
+  './tutorials/tutorials.js',
+  './tutorials/images/twistedcubic2.jpg',
+  './tutorials/images/twistedcubicP.jpg',
+  './tutorials/images/whitney.jpg',
   './workers/singular-terminal-worker.js',
   './workers/singular-batch-worker.js',
   './manifest.webmanifest'
