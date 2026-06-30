@@ -33,7 +33,9 @@ const EXPECTED_VENDOR_ASSETS = Object.freeze([
   'vendor/xterm/xterm.js',
   'vendor/xterm/addon-fit.js',
   'vendor/xterm-pty/index.mjs',
-  'vendor/xterm-pty/workerTools.js'
+  'vendor/xterm-pty/workerTools.js',
+  'vendor/katex/katex.min.css',
+  'vendor/katex/katex.min.js'
 ]);
 const EXPECTED_ENGINE_ASSETS = Object.freeze([
   'engine/Singular.js',
@@ -141,6 +143,9 @@ const el = Object.freeze({
   tutorialTabPanel: document.getElementById('tutorial-tab-panel'),
   tutorialSelect: document.getElementById('tutorial-select'),
   tutorialSummary: document.getElementById('tutorial-summary'),
+  tutorialAppendEditor: document.getElementById('tutorial-append-editor'),
+  tutorialPasteAll: document.getElementById('tutorial-paste-all'),
+  tutorialMultiline: document.getElementById('tutorial-multiline'),
   tutorialContent: document.getElementById('tutorial-content'),
   editor: document.getElementById('editor'),
   editorHighlight: document.getElementById('editor-highlight'),
@@ -193,7 +198,7 @@ let terminalHistoryDraft = '';
 let terminalKeydownHandler = null;
 let terminalPasteHandler = null;
 let activeWorkbenchTab = 'editor';
-let currentTutorialCodeLines = [];
+let currentTutorialSteps = [];
 let workerRequestId = 0;
 let ptyModulePromise = null;
 let vendorVerified = false;
@@ -437,21 +442,27 @@ const LATEX_SYMBOLS = Object.freeze({
   Z: 'Z',
   bar: '',
   cap: '∩',
+  cdot: '·',
+  colon: ':',
   cong: '≅',
   dots: '…',
+  geq: '≥',
   infty: '∞',
   in: '∈',
   langle: '⟨',
   ldots: '…',
+  leq: '≤',
   mapsto: '↦',
+  mathcal: '',
   mathfrak: '',
   mathbb: '',
+  neq: '≠',
   operatorname: '',
   op: '⊕',
   oplus: '⊕',
   otimes: '⊗',
-  qquad: '  ',
-  quad: ' ',
+  qquad: '\u2003\u2003',
+  quad: '\u2003',
   rangle: '⟩',
   rightarrow: '→',
   sqrt: '√',
@@ -481,12 +492,36 @@ function replaceLatexCommands(text) {
   return String(text || '')
     .replace(/\\left/g, '')
     .replace(/\\right/g, '')
-    .replace(/\\[,;:]/g, ' ')
+    .replace(/\\[,;:]/g, '\u2009')
     .replace(/\\!/g, '')
     .replace(/\\([A-Za-z]+)/g, (_, command) => LATEX_SYMBOLS[command] ?? command);
 }
 
-function renderLatexInline(math) {
+function renderMathSegment(text) {
+  let html = '';
+  for (const char of String(text || '')) {
+    if (/^[A-Za-z]$/.test(char)) {
+      html += `<var>${escapeHtml(char)}</var>`;
+    } else if (char === '-') {
+      html += '−';
+    } else if (char === '*') {
+      html += '·';
+    } else {
+      html += escapeHtml(char);
+    }
+  }
+  return html;
+}
+
+function renderMathText(text) {
+  const tokenPattern = /(\uE100\d+\uE101)/g;
+  return String(text || '')
+    .split(tokenPattern)
+    .map(part => /^\uE100\d+\uE101$/.test(part) ? part : renderMathSegment(part))
+    .join('');
+}
+
+function renderLatexContents(math) {
   const fragments = [];
   const stash = html => {
     const token = `\uE100${fragments.length}\uE101`;
@@ -498,42 +533,71 @@ function renderLatexInline(math) {
     return stash(`<span class="math-op">${escapeHtml(operator)}</span>`);
   });
   value = value.replace(/\\begin\{pmatrix\}([\s\S]*?)\\end\{pmatrix\}/g, (_, body) => {
-    const rows = String(body).split(/\\\\/).map(row => row.split('&').map(cell => escapeHtml(replaceLatexCommands(cell.trim()))));
-    return stash(`<span class="math-matrix">${rows.map(row => `<span>${row.join(' ')}</span>`).join('')}</span>`);
+    const rows = String(body).split(/\\\\/).map(row => row.split('&').map(cell => renderLatexContents(cell.trim())));
+    return stash(`<span class="math-matrix">${rows.map(row => `<span class="math-matrix-row">${row.map(cell => `<span>${cell}</span>`).join('')}</span>`).join('')}</span>`);
   });
   value = value.replace(/\\bar\{([^{}]+)\}/g, (_, body) => {
-    return stash(`<span class="math-overline">${escapeHtml(replaceLatexCommands(body))}</span>`);
+    return stash(`<span class="math-overline">${renderLatexContents(body)}</span>`);
   });
   value = value.replace(/\\bar\s+([A-Za-z])/g, (_, body) => {
-    return stash(`<span class="math-overline">${escapeHtml(body)}</span>`);
+    return stash(`<span class="math-overline">${renderLatexContents(body)}</span>`);
   });
   value = value.replace(/\\sqrt\{([^{}]+)\}/g, (_, body) => {
-    return stash(`<span class="math-root">√(${escapeHtml(replaceLatexCommands(body))})</span>`);
+    return stash(`<span class="math-root"><span>√</span><span>${renderLatexContents(body)}</span></span>`);
   });
   value = value.replace(/\\xrightarrow\{([^{}]+)\}/g, (_, label) => {
-    return stash(`<span class="math-arrow">→<sup>${escapeHtml(replaceLatexCommands(label))}</sup></span>`);
+    return stash(`<span class="math-arrow">→<sup>${renderLatexContents(label)}</sup></span>`);
   });
   value = value.replace(/\\mathbb\{([A-Za-z])\}/g, (_, symbol) => MATHBB_SYMBOLS[symbol] || symbol);
   value = value.replace(/\\mathbb\s+([A-Za-z])/g, (_, symbol) => MATHBB_SYMBOLS[symbol] || symbol);
   value = value.replace(/\\mathfrak\{([A-Za-z])\}/g, (_, symbol) => MATHFRAK_SYMBOLS[symbol] || symbol);
   value = value.replace(/\\mathfrak\s+([A-Za-z])/g, (_, symbol) => MATHFRAK_SYMBOLS[symbol] || symbol);
   value = value.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, (_, numerator, denominator) => {
-    return stash(`<span class="math-frac"><span>${escapeHtml(replaceLatexCommands(numerator))}</span>/<span>${escapeHtml(replaceLatexCommands(denominator))}</span></span>`);
+    return stash(`<span class="math-frac"><span>${renderLatexContents(numerator)}</span><span>${renderLatexContents(denominator)}</span></span>`);
+  });
+  value = value.replace(/\\frac\s*([A-Za-z0-9])\s*([A-Za-z0-9])/g, (_, numerator, denominator) => {
+    return stash(`<span class="math-frac"><span>${renderLatexContents(numerator)}</span><span>${renderLatexContents(denominator)}</span></span>`);
   });
   value = value.replace(/([_^])\{([^{}]+)\}/g, (_, marker, body) => {
     const tag = marker === '^' ? 'sup' : 'sub';
-    return stash(`<${tag}>${escapeHtml(replaceLatexCommands(body))}</${tag}>`);
+    return stash(`<${tag}>${renderLatexContents(body)}</${tag}>`);
   });
   value = value.replace(/([_^])([A-Za-z0-9+-])/g, (_, marker, body) => {
     const tag = marker === '^' ? 'sup' : 'sub';
-    return stash(`<${tag}>${escapeHtml(body)}</${tag}>`);
+    return stash(`<${tag}>${renderLatexContents(body)}</${tag}>`);
   });
   value = replaceLatexCommands(value);
-  let html = escapeHtml(value);
+  let html = renderMathText(value);
   for (const [index, fragment] of fragments.entries()) {
     html = html.replaceAll(`\uE100${index}\uE101`, fragment);
   }
-  return `<span class="tutorial-math">${html}</span>`;
+  return html;
+}
+
+function renderLatexFallback(math) {
+  return `<span class="tutorial-math">${renderLatexContents(math)}</span>`;
+}
+
+function renderLatex(math, { displayMode = false } = {}) {
+  const katex = globalThis.katex;
+  if (typeof katex?.renderToString === 'function') {
+    try {
+      return katex.renderToString(String(math || '').trim(), {
+        displayMode,
+        throwOnError: false,
+        strict: 'ignore',
+        trust: false,
+        output: 'htmlAndMathml'
+      });
+    } catch {
+      return renderLatexFallback(math);
+    }
+  }
+  return renderLatexFallback(math);
+}
+
+function renderLatexInline(math) {
+  return renderLatex(math);
 }
 
 function renderInlineMarkdown(text) {
@@ -573,7 +637,7 @@ function renderTutorialMarkdown(markdown) {
     const displayMath = /^\$\$([\s\S]+)\$\$$/.exec(trimmed);
     if (displayMath) {
       flushParagraph();
-      html.push(`<div class="tutorial-math-display">${renderLatexInline(displayMath[1])}</div>`);
+      html.push(`<div class="tutorial-math-display">${renderLatex(displayMath[1], { displayMode: true })}</div>`);
       continue;
     }
     const image = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(trimmed);
@@ -599,22 +663,108 @@ function renderTutorialMarkdown(markdown) {
   return html.join('');
 }
 
-function createTutorialCodeLineButton(line, index, tutorial) {
+function tutorialBlocks(tutorial) {
+  if (Array.isArray(tutorial?.blocks)) return tutorial.blocks;
+  return [{ code: tutorial?.code, source: tutorial?.source }];
+}
+
+function tutorialCodeText(tutorial) {
+  return tutorialBlocks(tutorial)
+    .map(block => String(block.code || '').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+function tutorialPhysicalLineSteps(tutorial) {
+  const steps = [];
+  for (const block of tutorialBlocks(tutorial)) {
+    const source = block.source || tutorial.source || '';
+    const lines = String(block.code || '').trim().split(/\r?\n/);
+    for (const [lineIndex, codeLine] of lines.entries()) {
+      const code = codeLine.replace(/\s+$/, '');
+      if (!code.trim()) continue;
+      steps.push({
+        code,
+        source,
+        startLine: lineIndex + 1,
+        endLine: lineIndex + 1,
+        lineLabel: String(lineIndex + 1)
+      });
+    }
+  }
+  return steps;
+}
+
+function singularStatementEnds(line) {
+  return /;\s*(?:\/\/.*)?$/.test(String(line || '').trim());
+}
+
+function flushTutorialStep(steps, pending, source, startLine, endLine) {
+  if (!pending.length) return;
+  steps.push({
+    code: pending.join('\n'),
+    source,
+    startLine,
+    endLine,
+    lineLabel: startLine === endLine ? String(startLine) : `${startLine}-${endLine}`
+  });
+}
+
+function tutorialStatementSteps(tutorial) {
+  const steps = [];
+  for (const block of tutorialBlocks(tutorial)) {
+    const source = block.source || tutorial.source || '';
+    const lines = String(block.code || '').trim().split(/\r?\n/);
+    let pending = [];
+    let startLine = 0;
+    let endLine = 0;
+    for (const [lineIndex, codeLine] of lines.entries()) {
+      const code = codeLine.replace(/\s+$/, '');
+      if (!code.trim()) continue;
+      if (!pending.length) startLine = lineIndex + 1;
+      endLine = lineIndex + 1;
+      pending.push(code);
+      if (singularStatementEnds(code)) {
+        flushTutorialStep(steps, pending, source, startLine, endLine);
+        pending = [];
+      }
+    }
+    flushTutorialStep(steps, pending, source, startLine, endLine);
+  }
+  return steps;
+}
+
+function buildTutorialSteps(tutorial) {
+  return el.tutorialMultiline?.checked
+    ? tutorialStatementSteps(tutorial)
+    : tutorialPhysicalLineSteps(tutorial);
+}
+
+function tutorialStepTerminalCode(step) {
+  return String(step?.code || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+function createTutorialCodeStepButton(step, index, tutorial) {
   const button = document.createElement('button');
   const lineNumber = document.createElement('span');
   const scroll = document.createElement('span');
   const code = document.createElement('code');
   button.type = 'button';
   button.className = 'tutorial-code-line-button';
-  button.setAttribute('aria-label', `Send line ${line.lineNumber} from ${tutorial.title} to the Singular terminal`);
-  button.title = line.source ? `Send line ${line.lineNumber} from ${line.source}` : `Send line ${line.lineNumber}`;
+  if (step.startLine !== step.endLine) button.classList.add('is-multiline');
+  button.setAttribute('aria-label', `Paste tutorial lines ${step.lineLabel} from ${tutorial.title} into the Singular terminal`);
+  button.title = step.source ? `Paste lines ${step.lineLabel} from ${step.source}` : `Paste lines ${step.lineLabel}`;
   lineNumber.className = 'tutorial-code-line-number';
-  lineNumber.textContent = String(line.lineNumber);
+  lineNumber.textContent = step.lineLabel;
   scroll.className = 'tutorial-code-scroll';
-  code.innerHTML = highlightSingular(line.code || '');
+  code.innerHTML = highlightSingular(step.code || '');
   scroll.append(code);
   button.append(lineNumber, scroll);
-  button.addEventListener('click', () => runAction('Send tutorial line', () => sendTutorialCode(index)));
+  button.addEventListener('click', () => runAction('Paste tutorial step', () => sendTutorialCode(index)));
   button.addEventListener('keydown', scrollTutorialCodeLineWithKeyboard);
   return button;
 }
@@ -649,7 +799,7 @@ function renderTutorialOptions() {
 function renderTutorial() {
   const index = Math.max(0, Math.min(TUTORIALS.length - 1, Number(el.tutorialSelect.value || 0)));
   const tutorial = TUTORIALS[index];
-  currentTutorialCodeLines = [];
+  currentTutorialSteps = [];
   el.tutorialContent.textContent = '';
   if (!tutorial) {
     el.tutorialSummary.textContent = 'No tutorials available.';
@@ -677,25 +827,12 @@ function renderTutorial() {
     el.tutorialContent.append(intro);
   }
 
-  const blocks = Array.isArray(tutorial.blocks) ? tutorial.blocks : [{ code: tutorial.code, source: tutorial.source }];
+  currentTutorialSteps = buildTutorialSteps(tutorial);
   const list = document.createElement('div');
   list.className = 'tutorial-code-list';
-  list.setAttribute('aria-label', `Code lines for ${tutorial.title}`);
-  for (const block of blocks) {
-    const source = block.source || tutorial.source || '';
-    const lines = String(block.code || '').trim().split(/\r?\n/);
-    for (const [lineIndex, codeLine] of lines.entries()) {
-      const code = codeLine.replace(/\s+$/, '');
-      if (!code.trim()) continue;
-      currentTutorialCodeLines.push({
-        code,
-        source,
-        lineNumber: lineIndex + 1
-      });
-    }
-  }
-  for (const [lineIndex, line] of currentTutorialCodeLines.entries()) {
-    list.append(createTutorialCodeLineButton(line, lineIndex, tutorial));
+  list.setAttribute('aria-label', `Code steps for ${tutorial.title}`);
+  for (const [stepIndex, step] of currentTutorialSteps.entries()) {
+    list.append(createTutorialCodeStepButton(step, stepIndex, tutorial));
   }
   el.tutorialContent.append(list);
   requestAnimationFrame(updateTutorialLineOverflow);
@@ -1088,7 +1225,8 @@ async function ensureVendorVerified() {
     return;
   }
   const manifest = await loadManifest(VENDOR_MANIFEST);
-  const assets = EXPECTED_VENDOR_ASSETS;
+  requireManifestAssets(manifest, EXPECTED_VENDOR_ASSETS, VENDOR_MANIFEST);
+  const assets = Object.keys(manifest.assets || {});
   await verifyManifestAssets(manifest, assets);
   vendorVerified = true;
   log(`Verified ${assets.length} browser vendor asset(s) against ${VENDOR_MANIFEST}.`);
@@ -1281,7 +1419,9 @@ function terminalAtPrompt() {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index].trim();
     if (!line) continue;
-    return line === '>';
+    if (line === '>') return true;
+    if (/(?:^|\s)(?:\.\s*)+>$/.test(line)) return true;
+    return false;
   }
   return false;
 }
@@ -1732,7 +1872,26 @@ async function restartSession() {
   await startSession();
 }
 
-async function sendCodeToTerminal(code, description) {
+function selectedTutorial() {
+  const index = Math.max(0, Math.min(TUTORIALS.length - 1, Number(el.tutorialSelect.value || 0)));
+  return TUTORIALS[index] || null;
+}
+
+function appendTutorialToEditor() {
+  const tutorial = selectedTutorial();
+  const code = tutorialCodeText(tutorial).trimEnd();
+  if (!tutorial || !code) {
+    log('No tutorial code to append.');
+    return;
+  }
+  const current = el.editor.value.replace(/\s+$/, '');
+  const next = current ? `${current}\n\n${code}\n` : `${code}\n`;
+  setWorkbenchTab('editor');
+  setEditorValue(next, { focus: true });
+  log(`Appended tutorial "${tutorial.title}" to the editor.`);
+}
+
+async function sendTerminalChunks(chunks, description) {
   if (!worker || !ptySlave) {
     log('No terminal session. Start Singular first.');
     return;
@@ -1745,31 +1904,41 @@ async function sendCodeToTerminal(code, description) {
     log('Terminal is not ready for input yet; wait for the Singular prompt and try again.');
     return;
   }
-  const lines = String(code || '')
-    .split(/\r?\n/)
-    .map(line => line.trimEnd())
-    .filter(line => line.trim());
-  if (!lines.length) {
+  const codeChunks = chunks
+    .map(chunk => String(chunk || '').replace(/\s+$/, ''))
+    .filter(chunk => chunk.trim());
+  if (!codeChunks.length) {
     log(`No ${description} to send.`);
     return;
   }
   let sent = 0;
-  for (const line of lines) {
+  let sentLines = 0;
+  for (const chunk of codeChunks) {
     if (!await waitForTerminalInputReady()) {
       log(`Stopped sending ${description}; terminal did not return to a prompt.`);
       break;
     }
     const before = terminalBufferText();
-    if (!writeTerminalInput(`${line}\n`)) break;
-    rememberTerminalCommand(line);
+    if (!writeTerminalInput(`${chunk}\n`)) break;
+    rememberTerminalCommands(chunk);
     sent += 1;
+    sentLines += chunk.split(/\r?\n/).filter(line => line.trim()).length;
     resetTerminalCurrentLine();
     resetTerminalLineNavigation();
     await waitForTerminalCommandComplete(before);
   }
   if (sent) {
-    log(`Sent ${sent} ${sent === 1 ? 'line' : 'lines'} of ${description} to the terminal via ${terminalInputMethod}.`);
+    const detail = sent === sentLines ? `${sent} ${sent === 1 ? 'line' : 'lines'}` : `${sentLines} lines in ${sent} steps`;
+    log(`Sent ${detail} of ${description} to the terminal via ${terminalInputMethod}.`);
   }
+}
+
+async function sendCodeToTerminal(code, description) {
+  const lines = String(code || '')
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.trim());
+  await sendTerminalChunks(lines, description);
 }
 
 async function sendEditorToTerminal() {
@@ -1777,12 +1946,22 @@ async function sendEditorToTerminal() {
 }
 
 async function sendTutorialCode(index) {
-  const line = currentTutorialCodeLines[index];
-  if (!line?.code) {
-    log('Tutorial code line is empty.');
+  const step = currentTutorialSteps[index];
+  if (!step?.code) {
+    log('Tutorial code step is empty.');
     return;
   }
-  await sendCodeToTerminal(line.code, `tutorial line ${line.lineNumber}`);
+  await sendTerminalChunks([tutorialStepTerminalCode(step)], `tutorial lines ${step.lineLabel}`);
+}
+
+async function pasteTutorialAll() {
+  const tutorial = selectedTutorial();
+  if (!tutorial) {
+    log('No tutorial selected.');
+    return;
+  }
+  const steps = tutorialStatementSteps(tutorial).map(tutorialStepTerminalCode);
+  await sendTerminalChunks(steps, `tutorial "${tutorial.title}"`);
 }
 
 function writeTerminalInput(text, { quiet = false } = {}) {
@@ -2103,6 +2282,9 @@ function wireEvents() {
   el.tabEditor.addEventListener('click', () => setWorkbenchTab('editor'));
   el.tabTutorials.addEventListener('click', () => setWorkbenchTab('tutorials'));
   el.tutorialSelect.addEventListener('change', renderTutorial);
+  el.tutorialAppendEditor.addEventListener('click', () => runAction('Append tutorial to editor', appendTutorialToEditor));
+  el.tutorialPasteAll.addEventListener('click', () => runAction('Paste tutorial all', pasteTutorialAll));
+  el.tutorialMultiline.addEventListener('change', renderTutorial);
   window.addEventListener('resize', () => requestAnimationFrame(updateTutorialLineOverflow));
 
   document.addEventListener('keydown', event => {
@@ -2131,6 +2313,9 @@ async function main() {
     benchmark,
     sendEditorToTerminal,
     sendTutorialCode,
+    appendTutorialToEditor,
+    pasteTutorialAll,
+    tutorialSteps: () => currentTutorialSteps,
     tutorials: TUTORIALS,
     shortcuts: SHORTCUTS,
     listFiles,

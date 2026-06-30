@@ -1,4 +1,4 @@
-const CACHE = 'singular-workbench-shell-v41';
+const CACHE = 'singular-workbench-shell-v44';
 const SHELL = [
   './',
   './index.html',
@@ -7,6 +7,16 @@ const SHELL = [
   './js/app.js',
   './js/workspace-db.js',
   './tutorials/tutorials.js',
+  './tutorials/images/4points.png',
+  './tutorials/images/circlepar.png',
+  './tutorials/images/deg5curve.png',
+  './tutorials/images/deg5curvelinsys.png',
+  './tutorials/images/embedded.png',
+  './tutorials/images/highcorner.png',
+  './tutorials/images/iq.png',
+  './tutorials/images/node.png',
+  './tutorials/images/steiner2.jpg',
+  './tutorials/images/twoell2.png',
   './tutorials/images/twistedcubic2.jpg',
   './tutorials/images/twistedcubicP.jpg',
   './tutorials/images/whitney.jpg',

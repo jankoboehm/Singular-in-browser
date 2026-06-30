@@ -6,7 +6,9 @@ export const TUTORIALS = Object.freeze([
     pdfPage: 13,
     markdown: `This computes a lexicographic Gröbner basis for the ideal
 $$I=\\langle 2x^2-xy+2y^2-2,\\;2x^2-3xy+3y^2-2\\rangle\\subset\\mathbb Q[y,x].$$
-With the variable order $y>x$, the basis eliminates $y$ and produces a univariate polynomial in $x$. The output is used to solve the intersection of the two ellipses: first solve $4x^4-5x^2+1=0$, then recover $y$ from the linear relation $3y+8x^3-8x=0$.`,
+With the variable order $y>x$, the basis eliminates $y$ and produces a univariate polynomial in $x$. The output is used to solve the intersection of the two ellipses: first solve $4x^4-5x^2+1=0$, then recover $y$ from the linear relation $3y+8x^3-8x=0$.
+
+![Buchberger's algorithm for the intersection of two ellipses](tutorials/images/twoell2.png)`,
     code: `ring R=0,(y,x),lp;
 ideal I = 2x2-xy+2y2-2, 2x2-3xy+3y2-2;
 std(I);`
@@ -116,7 +118,9 @@ division(y^2+x^2,ideal(x-x^2,y));`
 $$(0,0),\\;(1,0),\\;(0,1),\\;(1,1)$$
 by intersecting their maximal ideals. The resulting Gröbner basis
 $$\\langle y^2-y,\\;x^2-x\\rangle$$
-cuts out exactly those four points in $\\mathbb A^2$.`,
+cuts out exactly those four points in $\\mathbb A^2$.
+
+![Four points as the intersection of two pairs of lines](tutorials/images/4points.png)`,
     code: `ring R=0,(x,y),lp;
 ideal I1 = x,y;
 ideal I2 = x-1,y;
@@ -151,14 +155,16 @@ eliminate(I,x);`
 $$I=\\langle x-st,\\;y-t,\\;z-s^2\\rangle\\subset K[s,t,x,y,z]$$
 encodes the graph of a polynomial map. Eliminating $s,t$ yields the closure of the image in the $x,y,z$ variables. The first Gröbner basis element gives the equation
 $$x^2-y^2z=0,$$
-the Whitney umbrella.`,
+the Whitney umbrella.
+
+![Whitney umbrella](tutorials/images/whitney.jpg)`,
     code: `ring R=0,(s,t,x,y,z),lp;
 ideal I = x-st, y-t, z-s2;
 std(I);`
   },
   {
     id: "whitney-umbrella-kernel",
-    title: "Whitney umbrella kernel",
+    title: "Steiner surface kernel",
     source: "PDF p. 100",
     pdfPage: 100,
     markdown: `The quotient ring $Q=K[t_1,t_2,t_3]/\\langle t_1^2+t_2^2+t_3^2-1\\rangle$ represents the unit sphere. The map sends
@@ -166,7 +172,7 @@ $$x\\mapsto t_1t_2,\\quad y\\mapsto t_1t_3,\\quad z\\mapsto t_2t_3.$$
 Computing the kernel gives the implicit equation of the image, the Steiner surface:
 $$x^2y^2+x^2z^2+y^2z^2-xyz=0.$$
 
-![Whitney umbrella](tutorials/images/whitney.jpg)`,
+![Steiner surface over the reals](tutorials/images/steiner2.jpg)`,
     code: `ring S = 0,(x,y,z),dp;
 ring R = 0,(t1,t2,t3),dp;
 ideal I = t1^2+t2^2+t3^2-1;
@@ -184,7 +190,9 @@ kernel(Q,f);`
 $$t\\mapsto\\left(\\frac{1-t^2}{1+t^2},\\frac{2t}{1+t^2}\\right)$$
 using an auxiliary variable $s$ to saturate away the denominator $1+t^2$. The eliminated equation is
 $$x^2+y^2-1=0,$$
-so the closure of the image is the unit circle.`,
+so the closure of the image is the unit circle.
+
+![Rational parametrization of the circle](tutorials/images/circlepar.png)`,
     code: `ring R=0,(s,t,x,y),lp;
 ideal I = (t2+1)*x-(1-t2), (t2+1)*y-2t, 1-(t2+1)^2*s;
 option(redSB);
@@ -195,7 +203,9 @@ std(I);`
     title: "A nodal curve",
     source: "PDF p. 108",
     pdfPage: 108,
-    markdown: `The nodal curve is defined by $t_1^3+t_1^2-t_2^2=0$. The script computes the image of the rational function $x=t_1/t_2$ on this curve by introducing $s$ to exclude $t_2=0$. The Gröbner basis contains relations expressing $t_1,t_2,s$ in terms of $x$, showing how the rational map leads to a parametrization of the curve.`,
+    markdown: `The nodal curve is defined by $t_1^3+t_1^2-t_2^2=0$. The script computes the image of the rational function $x=t_1/t_2$ on this curve by introducing $s$ to exclude $t_2=0$. The Gröbner basis contains relations expressing $t_1,t_2,s$ in terms of $x$, showing how the rational map leads to a parametrization of the curve.
+
+![Nodal curve](tutorials/images/node.png)`,
     code: `ring R=0,(s,t1,t2,x),lp;
 ideal I = t1^3+t1^2-t2^2, t2*x-t1,1-t2*s;
 std(I);`
@@ -222,6 +232,8 @@ quotient(I+ideal(z),ideal(x));`
 $$\\langle x+y-1,\\;y^2-y\\rangle,$$
 namely $(1,0)$ and $(0,1)$.
 
+![Ideal quotient](tutorials/images/iq.png)
+
 This computes the elimination ideals $I\\cap\\mathbb Q[y]$ and $I\\cap\\mathbb Q[x]$ for the two-ellipse system. The outputs $y^3-y$ and $4x^4-5x^2+1$ give the finite candidate coordinates used to solve the zero-dimensional system.`,
     code: `ring R=0,(x,y),dp;
 ideal I = x2-x, y2-y;
@@ -239,7 +251,9 @@ eliminate(I,y);`
     pdfPage: 116,
     markdown: `With variable order $y>x$, lexicographic Gröbner basis computation makes the last variable $x$ appear in a univariate equation. The triangular form is used to solve $x$ first, then recover $y$ from the linear relation.
 
-With variable order $x>y$, the Gröbner basis produces a univariate equation in $y$, together with additional equations that filter spurious Cartesian-product candidates. It illustrates the solve-by-elimination workflow for zero-dimensional ideals.`,
+With variable order $x>y$, the Gröbner basis produces a univariate equation in $y$, together with additional equations that filter spurious Cartesian-product candidates. It illustrates the solve-by-elimination workflow for zero-dimensional ideals.
+
+![Buchberger's algorithm for the intersection of two ellipses](tutorials/images/twoell2.png)`,
     code: `ring R=0,(y,x),lp;
 ideal I = 2x2-xy+2y2-2, 2x2-3xy+3y2-2;
 std(I);
@@ -288,7 +302,9 @@ quotient(J3,ideal(t0,t1));`
     title: "A degree five space curve",
     source: "PDF p. 139",
     pdfPage: 139,
-    markdown: `This computes the image of a rational map from a plane quintic curve to $\\mathbb P^3$. The graph ideal is saturated by the coordinate functions of the map, then the source variables $t_0,t_1,t_2$ are eliminated. The resulting ideal is generated by three quadrics, and \`slocus\` verifies that the image curve is smooth.`,
+    markdown: `This computes the image of a rational map from a plane quintic curve to $\\mathbb P^3$. The graph ideal is saturated by the coordinate functions of the map, then the source variables $t_0,t_1,t_2$ are eliminated. The resulting ideal is generated by three quadrics, and \`slocus\` verifies that the image curve is smooth.
+
+![Degree 5 plane curve with three double points and one triple point](tutorials/images/deg5curve.png)`,
     code: `ring R = 0, (t0,t1,t2,x0,x1,x2,x3), (dp(3),dp(4));
 ideal C = t1^5+10*t1^4*t2+20*t1^3*t2^2+130*t1^2*t2^3-20*t1*t2^4
 +20*t2^5-2*t1^4*t0-40*t1^3*t2*t0-150*t1^2*t2^2*t0-90*t1*t2^3*t0
@@ -316,7 +332,9 @@ The script forms a matrix of coefficients of the generators that are linear in $
 
 The syzygy module of the transposed relation matrix gives a generator for the solution space of the homogeneous linear system. The resulting column vector provides a parametrization of the original quintic curve, hence the inverse data for the birational map.
 
-Substituting the three coordinates obtained from the syzygy computation into the quintic equation $C$ gives zero. This verifies that the recovered parametrization indeed maps into the original curve.`,
+Substituting the three coordinates obtained from the syzygy computation into the quintic equation $C$ gives zero. This verifies that the recovered parametrization indeed maps into the original curve.
+
+![Three curves in the linear system of quadrics through the singular points of C](tutorials/images/deg5curvelinsys.png)`,
     code: `ring R = 0, (t0,t1,t2,x0,x1), (dp(3),dp(2));
 ideal C = t1^5+10*t1^4*t2+20*t1^3*t2^2+130*t1^2*t2^3-20*t1*t2^4
 +20*t2^5-2*t1^4*t0-40*t1^3*t2*t0-150*t1^2*t2^2*t0-90*t1*t2^3*t0
@@ -341,7 +359,9 @@ subst(C,t0,Par[1,1],t1,Par[2,1],t2,Par[3,1]);`
 $$J(f)=\\langle 5x^4+2xy^2,\\;2x^2y+6y^5\\rangle.$$
 Using the local degree ordering \`ds\`, Singular computes the highest corner of $L(J(f))$ as $y^6$.
 
-Continuing the previous computation, this displays the leading terms of a standard basis of the Jacobian ideal. These monomials generate the lead ideal whose complement in the monomial lattice determines the highest corner.`,
+Continuing the previous computation, this displays the leading terms of a standard basis of the Jacobian ideal. These monomials generate the lead ideal whose complement in the monomial lattice determines the highest corner.
+
+![Highest corner for the Jacobian ideal of f=x^5+x^2y^2+y^6](tutorials/images/highcorner.png)`,
     code: `ring R =0,(x,y),ds;
 poly f = x^5+x^2*y^2+y^6;
 ideal J = jacob(f);
@@ -387,7 +407,7 @@ def L=res(I,0);`
     markdown: `The ideal $\\langle x_0^3-x_1^3-x_2^3\\rangle$ defines a projective plane cubic. Singular's \`hilbPoly\` returns the Hilbert polynomial data corresponding to $P_{R/I}(t)=3t$, so the curve has dimension $1$, degree $3$, and arithmetic genus $1$.`,
     code: `ring R=0,(x(0..2)),dp;
 ideal I = x(0)^3-x(1)^3 - x(2)^3;
-LIB "poly.lib";
+LIB "polylib.lib";
 hilbPoly(I);`
   },
   {
@@ -558,7 +578,9 @@ primdecGTZ(I);`
     pdfPage: 259,
     markdown: `For
 $$I=\\langle x_0x_1x_2,\\;x_0^2x_2,\\;x_1^3x_2^2\\rangle,$$
-\`primdecGTZ\` returns a decomposition with an additional component. This illustrates how embedded components appear in primary decomposition and how their radicals differ from the minimal primes.`,
+\`primdecGTZ\` returns a decomposition with an additional component. This illustrates how embedded components appear in primary decomposition and how their radicals differ from the minimal primes.
+
+![Primary decomposition with an embedded line](tutorials/images/embedded.png)`,
     code: `LIB "primdec.lib";
 ring R = 0,(x(0..2)),dp;
 ideal I = x(0)*x(1)*x(2), x(0)^2*x(2), x(1)^3*x(2)^2;
@@ -571,7 +593,9 @@ primdecGTZ(I);`
     pdfPage: 259,
     markdown: `Continuing the embedded-component example, radicals of selected ideal quotients recover possible associated primes:
 $$\\sqrt{I:x_0^2},\\quad \\sqrt{I:x_2^2},\\quad \\sqrt{I:x_1^3x_2}.$$
-For monomial ideals, suitable quotient elements can be chosen monomial, making this computation especially transparent.`,
+For monomial ideals, suitable quotient elements can be chosen monomial, making this computation especially transparent.
+
+![Primary decomposition with an embedded line](tutorials/images/embedded.png)`,
     code: `LIB "primdec.lib";
 ring R = 0,(x(0..2)),dp;
 ideal I = x(0)*x(1)*x(2), x(0)^2*x(2), x(1)^3*x(2)^2;

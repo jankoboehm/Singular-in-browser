@@ -260,6 +260,23 @@ textarea {
 
 .tutorial-panel .text-input { margin-bottom: .35rem; }
 
+.tutorial-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .55rem;
+  align-items: center;
+  margin: .45rem 0 .75rem;
+}
+
+.tutorial-option {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  color: var(--muted);
+  font-size: .86rem;
+  font-weight: 700;
+}
+
 .tutorial-content {
   max-height: min(760px, calc(100vh - 17rem));
   overflow: auto;
@@ -274,16 +291,33 @@ textarea {
   background: var(--panel-strong);
 }
 
+.tutorial-markdown .katex {
+  font-size: 1.02em;
+}
+
+.tutorial-math-display .katex-display {
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .tutorial-math {
-  font-family: Georgia, "Times New Roman", serif;
-  font-style: italic;
+  font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", Georgia, "Times New Roman", serif;
+  font-style: normal;
+  letter-spacing: .01em;
   white-space: nowrap;
+}
+
+.tutorial-math var {
+  font-style: italic;
+  margin: 0 .01em;
 }
 
 .tutorial-math-display {
   margin: .55rem 0;
   overflow-x: auto;
-  padding-bottom: .1rem;
+  padding: .06rem 0 .16rem;
+  line-height: 1.55;
 }
 
 .tutorial-math-display .tutorial-math {
@@ -292,9 +326,37 @@ textarea {
 }
 
 .tutorial-math .math-op,
-.tutorial-math .math-frac,
 .tutorial-math .math-arrow {
   font-style: normal;
+}
+
+.tutorial-math .math-op {
+  margin: 0 .04em;
+}
+
+.math-frac {
+  display: inline-grid;
+  grid-template-rows: auto auto;
+  place-items: center;
+  vertical-align: -.45em;
+  margin: 0 .08em;
+  line-height: 1.05;
+}
+
+.math-frac > span:first-child {
+  min-width: 100%;
+  padding: 0 .12em .04em;
+  border-bottom: 1px solid currentColor;
+}
+
+.math-frac > span:last-child {
+  padding: .04em .12em 0;
+}
+
+.math-root {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: .03em;
 }
 
 .tutorial-math sup,
@@ -305,15 +367,17 @@ textarea {
 
 .math-matrix {
   display: inline-grid;
-  gap: .1rem;
+  gap: .08rem;
   margin: 0 .25rem;
-  padding: 0 .35rem;
+  padding: .05rem .35rem;
   border-inline: 1px solid currentColor;
   vertical-align: middle;
 }
 
-.math-matrix span {
-  display: block;
+.math-matrix-row {
+  display: grid;
+  grid-auto-flow: column;
+  gap: .55em;
   white-space: pre;
 }
 
@@ -354,7 +418,7 @@ textarea {
 
 .tutorial-code-line-button {
   display: grid;
-  grid-template-columns: 2.75rem minmax(0, 1fr);
+  grid-template-columns: 3.6rem minmax(0, 1fr);
   align-items: stretch;
   width: 100%;
   padding: 0;
@@ -380,6 +444,7 @@ textarea {
   color: var(--muted);
   background: var(--panel-strong);
   font: 700 .72rem/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
 }
 
 .tutorial-code-scroll {
@@ -403,6 +468,11 @@ textarea {
 .tutorial-code-line-button.is-overflowing .tutorial-code-line-number,
 .tutorial-code-line-button.is-overflowing .tutorial-code-scroll {
   min-height: calc(1.45em + 1.9rem);
+}
+
+.tutorial-code-line-button.is-multiline .tutorial-code-line-number,
+.tutorial-code-line-button.is-multiline .tutorial-code-scroll {
+  min-height: calc(2.9em + .7rem);
 }
 
 .tutorial-code-line-button.is-overflowing .tutorial-code-line-number {
