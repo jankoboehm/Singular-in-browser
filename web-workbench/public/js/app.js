@@ -13,7 +13,7 @@ import {
   deleteFile,
   textExtension
 } from './workspace-db.js';
-import { TUTORIALS } from '../tutorials/tutorials.js';
+import { TUTORIALS, TUTORIAL_CATEGORIES } from '../tutorials/tutorials.js';
 
 const CONTROL = '__singularControl';
 const DEFAULT_SCRIPT = `ring r = 0,(x,y),dp;\nideal I = x2-y3, x3-y5;\nideal G = std(I);\nG;\nwrite(":w /workspace/example-output.txt", "Groebner basis of I:", G);\n`;
@@ -42,6 +42,16 @@ const EXPECTED_ENGINE_ASSETS = Object.freeze([
   'engine/Singular.wasm',
   'engine/Singular.data'
 ]);
+const TUTORIAL_BY_ID = new Map(TUTORIALS.map(tutorial => [tutorial.id, tutorial]));
+const TUTORIAL_CATEGORY_LIST = Object.freeze(
+  TUTORIAL_CATEGORIES
+    .map(category => Object.freeze({
+      id: category.id,
+      title: category.title,
+      tutorials: Object.freeze(category.tutorialIds.map(id => TUTORIAL_BY_ID.get(id)).filter(Boolean))
+    }))
+    .filter(category => category.tutorials.length)
+);
 const IS_APPLE_PLATFORM = /mac|iphone|ipad|ipod/i.test(
   navigator.userAgentData?.platform || navigator.platform || ''
 );
@@ -126,6 +136,21 @@ const SINGULAR_BUILTINS = Object.freeze(new Set([
   'write'
 ]));
 
+function ensureTutorialCategoryElement() {
+  const existing = document.getElementById('tutorial-category');
+  if (existing) return existing;
+  const tutorialSelect = document.getElementById('tutorial-select');
+  const select = document.createElement('select');
+  select.id = 'tutorial-category';
+  select.className = 'text-input';
+  const label = document.createElement('label');
+  label.htmlFor = select.id;
+  label.className = 'small muted';
+  label.textContent = 'Category:';
+  if (tutorialSelect) tutorialSelect.before(label, select);
+  return select;
+}
+
 const el = Object.freeze({
   statusDot: document.getElementById('engine-status-dot'),
   status: document.getElementById('engine-status'),
@@ -141,6 +166,7 @@ const el = Object.freeze({
   tabTutorials: document.getElementById('tab-tutorials'),
   editorTabPanel: document.getElementById('editor-tab-panel'),
   tutorialTabPanel: document.getElementById('tutorial-tab-panel'),
+  tutorialCategory: ensureTutorialCategoryElement(),
   tutorialSelect: document.getElementById('tutorial-select'),
   tutorialSummary: document.getElementById('tutorial-summary'),
   tutorialAppendEditor: document.getElementById('tutorial-append-editor'),
@@ -786,19 +812,43 @@ function updateTutorialLineOverflow() {
   }
 }
 
-function renderTutorialOptions() {
+function selectedTutorialCategory() {
+  const index = Math.max(0, Math.min(TUTORIAL_CATEGORY_LIST.length - 1, Number(el.tutorialCategory.value || 0)));
+  return TUTORIAL_CATEGORY_LIST[index] || { id: 'all', title: 'Tutorials', tutorials: TUTORIALS };
+}
+
+function currentTutorialList() {
+  return selectedTutorialCategory().tutorials || [];
+}
+
+function renderTutorialCategories() {
+  el.tutorialCategory.textContent = '';
+  for (const [index, category] of TUTORIAL_CATEGORY_LIST.entries()) {
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = category.title;
+    el.tutorialCategory.append(option);
+  }
+}
+
+function renderTutorialOptions(preferredTutorialId = '') {
+  const tutorials = currentTutorialList();
   el.tutorialSelect.textContent = '';
-  for (const [index, tutorial] of TUTORIALS.entries()) {
+  for (const [index, tutorial] of tutorials.entries()) {
     const option = document.createElement('option');
     option.value = String(index);
     option.textContent = tutorial.title;
     el.tutorialSelect.append(option);
   }
+  const preferredIndex = tutorials.findIndex(tutorial => tutorial.id === preferredTutorialId);
+  el.tutorialSelect.value = String(Math.max(0, preferredIndex));
 }
 
 function renderTutorial() {
-  const index = Math.max(0, Math.min(TUTORIALS.length - 1, Number(el.tutorialSelect.value || 0)));
-  const tutorial = TUTORIALS[index];
+  const category = selectedTutorialCategory();
+  const tutorials = category.tutorials || [];
+  const index = Math.max(0, Math.min(tutorials.length - 1, Number(el.tutorialSelect.value || 0)));
+  const tutorial = tutorials[index];
   currentTutorialSteps = [];
   el.tutorialContent.textContent = '';
   if (!tutorial) {
@@ -817,7 +867,7 @@ function renderTutorial() {
   link.rel = 'noopener noreferrer';
   link.textContent = 'manuscript';
   const count = document.createElement('span');
-  count.textContent = ` - ${TUTORIALS.length} tutorials`;
+  count.textContent = ` - ${tutorials.length} ${tutorials.length === 1 ? 'tutorial' : 'tutorials'} in ${category.title}`;
   el.tutorialSummary.append(source, separator, link, count);
   const markdown = renderTutorialMarkdown(tutorial.markdown);
   if (markdown) {
@@ -1873,8 +1923,9 @@ async function restartSession() {
 }
 
 function selectedTutorial() {
-  const index = Math.max(0, Math.min(TUTORIALS.length - 1, Number(el.tutorialSelect.value || 0)));
-  return TUTORIALS[index] || null;
+  const tutorials = currentTutorialList();
+  const index = Math.max(0, Math.min(tutorials.length - 1, Number(el.tutorialSelect.value || 0)));
+  return tutorials[index] || null;
 }
 
 function appendTutorialToEditor() {
@@ -2281,6 +2332,10 @@ function wireEvents() {
   el.editor.addEventListener('scroll', refreshEditorHighlight);
   el.tabEditor.addEventListener('click', () => setWorkbenchTab('editor'));
   el.tabTutorials.addEventListener('click', () => setWorkbenchTab('tutorials'));
+  el.tutorialCategory.addEventListener('change', () => {
+    renderTutorialOptions();
+    renderTutorial();
+  });
   el.tutorialSelect.addEventListener('change', renderTutorial);
   el.tutorialAppendEditor.addEventListener('click', () => runAction('Append tutorial to editor', appendTutorialToEditor));
   el.tutorialPasteAll.addEventListener('click', () => runAction('Paste tutorial all', pasteTutorialAll));
@@ -2300,6 +2355,7 @@ function wireEvents() {
 
 async function main() {
   wireEvents();
+  renderTutorialCategories();
   renderTutorialOptions();
   renderTutorial();
   refreshEditorHighlight();
@@ -2317,6 +2373,7 @@ async function main() {
     pasteTutorialAll,
     tutorialSteps: () => currentTutorialSteps,
     tutorials: TUTORIALS,
+    tutorialCategories: TUTORIAL_CATEGORY_LIST,
     shortcuts: SHORTCUTS,
     listFiles,
     listVisibleFiles: listMergedFiles,

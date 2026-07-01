@@ -656,3 +656,86 @@ normap;
 std(slocus(norid));`
   },
 ]);
+
+export const TUTORIAL_CATEGORIES = Object.freeze([
+  {
+    id: "chapter-1",
+    title: "1. Introduction",
+    tutorialIds: Object.freeze([
+      "two-ellipses-groebner"
+    ])
+  },
+  {
+    id: "chapter-2",
+    title: "2. Ideals, Varieties and Standard Bases",
+    tutorialIds: Object.freeze([
+      "linear-system-standard-basis",
+      "monomial-orderings",
+      "normal-form-division",
+      "reduced-standard-basis",
+      "local-division"
+    ])
+  },
+  {
+    id: "chapter-3",
+    title: "3. Computing with Ideals and Algebraic Sets",
+    tutorialIds: Object.freeze([
+      "four-points",
+      "twisted-cubic-projection",
+      "parametrized-surface",
+      "whitney-umbrella-kernel",
+      "circle-parametrization",
+      "nodal-curve",
+      "ideal-quotient-basic",
+      "quotient-and-elimination",
+      "variable-order-effects",
+      "projective-closure",
+      "saturation-and-rational-normal-curve",
+      "degree-five-space-curve",
+      "degree-five-plane-curve",
+      "highest-corner-jacobian",
+      "higher-jacobian-ideal"
+    ])
+  },
+  {
+    id: "chapter-5",
+    title: "5. Free Resolutions and Invariants",
+    tutorialIds: Object.freeze([
+      "free-resolutions",
+      "hilbert-polynomial",
+      "betti-table-twisted-cubic",
+      "module-orderings",
+      "module-reductions",
+      "module-standard-reduction",
+      "standard-module-basis",
+      "sparse-resolution"
+    ])
+  },
+  {
+    id: "chapter-6",
+    title: "6. Computing with modules",
+    tutorialIds: Object.freeze([
+      "syzygy-matrix",
+      "module-quotient-modulo"
+    ])
+  },
+  {
+    id: "chapter-7",
+    title: "7. Primary decomposition",
+    tutorialIds: Object.freeze([
+      "irreducible-monomial-decomposition",
+      "primary-decomposition",
+      "embedded-primary-decomposition",
+      "radicals-after-quotients"
+    ])
+  },
+  {
+    id: "chapter-8",
+    title: "8. Normalization",
+    tutorialIds: Object.freeze([
+      "singular-locus-plane-curve",
+      "endomorphism-ring-step",
+      "normalization"
+    ])
+  }
+]);

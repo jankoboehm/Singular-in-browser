@@ -1,4 +1,4 @@
-const CACHE = 'singular-workbench-shell-v44';
+const CACHE = 'singular-workbench-shell-v47';
 const SHELL = [
   './',
   './index.html',

@@ -124,11 +124,24 @@ code, pre, textarea, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, M
   padding: .45rem .8rem;
 }
 
+#tab-tutorials {
+  border-color: #15803d;
+  background: #16a34a;
+  color: white;
+}
+
 .tab-button[aria-selected="true"] {
   background: Canvas;
   border-color: var(--border);
   border-bottom-color: Canvas;
   transform: translateY(1px);
+}
+
+#tab-tutorials[aria-selected="true"] {
+  border-color: #166534;
+  border-bottom-color: #15803d;
+  background: #15803d;
+  color: white;
 }
 
 .tab-panel[hidden] { display: none; }
